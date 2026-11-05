@@ -19,6 +19,7 @@ import (
 	"github.com/def-peter/cuedex-win/internal/integrations"
 	"github.com/def-peter/cuedex-win/internal/overlay"
 	"github.com/def-peter/cuedex-win/internal/paths"
+	"github.com/def-peter/cuedex-win/internal/playback"
 )
 
 // App owns the tray icon, the settings panel, and everything the panels show.
@@ -29,6 +30,7 @@ type App struct {
 	win      *mygo.Window
 	overlay  *overlay.Overlay
 	watch    *events.Watcher
+	player   *playback.Player
 	codex    integrations.CodexIntegration
 	opencode integrations.OpenCodeIntegration
 	state    settings
@@ -55,6 +57,12 @@ func New(dir paths.Dir, exe string) *App {
 			Exe:       exe,
 		},
 	}
+	// The player decides when a cue runs; the drawing and the counters are the
+	// main thread's, so its callbacks marshal there.
+	a.player = playback.New(
+		func(source events.Source) { mygo.RunOnMain(func() { a.cueStart(source) }) },
+		func() { mygo.RunOnMain(a.cueStop) },
+	)
 	a.state.onTogglePause = a.togglePause
 	a.state.onClose = a.hide
 	a.state.onToggleCodex = a.toggleCodex
@@ -96,11 +104,7 @@ func (a *App) Ready() {
 		a.overlay = cue
 	}
 
-	watch, err := events.Watch(a.dir.Events(), func(e events.Event) {
-		// The watcher has its own goroutine; the app is read and changed on
-		// the main thread only.
-		mygo.RunOnMain(func() { a.pulse(e.Source) })
-	})
+	watch, err := events.Watch(a.dir.Events(), func(e events.Event) { a.player.Submit(e) })
 	if err != nil {
 		log.Printf("cuedex: watch %s: %v", a.dir.Events(), err)
 		a.state.problem = "事件目录不可用：" + err.Error()
@@ -129,6 +133,7 @@ func (a *App) Ready() {
 		if a.watch != nil {
 			a.watch.Close()
 		}
+		a.player.Close()
 		if a.overlay != nil {
 			a.overlay.Close()
 		}
@@ -168,22 +173,17 @@ func (a *App) newWindow() *mygo.Window {
 	return w
 }
 
-// Cue is the wake a producer asks for with "CueDex.exe --cue". The file that
-// came with it is read by the watcher, whose own cue restarts in the
-// producer's colour a moment later.
-func (a *App) Cue() { a.pulse("") }
+// Cue is the wake a producer asks for with "CueDex.exe --cue". The cue itself
+// comes from the file the producer left, so the wake only asks the watcher to
+// look again: a notification that was missed must not lose a completion.
+func (a *App) Cue() { a.watch.Nudge() }
 
-// pulse shows one cue. An empty source is a bare wake, from a producer that
-// asked the app to cue without leaving a file the app could read.
-func (a *App) pulse(source events.Source) {
-	if a.state.paused {
-		return
-	}
+// cueStart draws one cue and records it. The player calls it on the main
+// thread, once per cue, never while another one is running.
+func (a *App) cueStart(source events.Source) {
 	a.state.cueCount++
 	a.state.lastCue = time.Now()
-	if source != "" {
-		a.state.lastSource = source
-	}
+	a.state.lastSource = source
 	if a.overlay != nil {
 		a.overlay.Show(sourceColour(source))
 	}
@@ -192,8 +192,20 @@ func (a *App) pulse(source events.Source) {
 	}
 }
 
+// cueStop takes a cue off the screen when the user pauses.
+func (a *App) cueStop() {
+	if a.overlay != nil {
+		a.overlay.Hide()
+	}
+}
+
 func (a *App) setPaused(paused bool) {
 	a.state.paused = paused
+	if paused {
+		a.player.Pause()
+	} else {
+		a.player.Resume()
+	}
 	a.invalidate()
 }
 

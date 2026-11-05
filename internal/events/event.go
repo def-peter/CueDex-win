@@ -76,6 +76,11 @@ var (
 
 // IsEventName reports whether a file name is one a producer writes.
 func IsEventName(name string) bool {
+	// A producer writes a temporary file first and renames it into place.
+	// Reading one would mean racing the producer for it.
+	if strings.HasSuffix(strings.ToLower(name), ".tmp") {
+		return false
+	}
 	if strings.HasPrefix(name, "turn-complete.") {
 		return true
 	}
@@ -86,9 +91,11 @@ func IsEventName(name string) bool {
 // is the completion time of a legacy empty turn-complete file.
 func Parse(name string, data []byte, modified time.Time) (Event, error) {
 	switch {
-	case strings.HasPrefix(name, "cue-") && strings.HasSuffix(name, ".json"):
+	case !IsEventName(name):
+		return Event{}, fmt.Errorf("%w: %q", ErrNotAnEvent, name)
+	case strings.HasPrefix(name, "cue-"):
 		return decode(data)
-	case strings.HasPrefix(name, "turn-complete."):
+	default:
 		// Helpers written before the payload existed wrote the file empty;
 		// the protocol keeps them working by synthesizing the event.
 		if len(data) == 0 {
@@ -101,7 +108,6 @@ func Parse(name string, data []byte, modified time.Time) (Event, error) {
 		}
 		return decode(data)
 	}
-	return Event{}, fmt.Errorf("%w: %q", ErrNotAnEvent, name)
 }
 
 // wire is the payload's shape. It is separate from Event so a producer writes

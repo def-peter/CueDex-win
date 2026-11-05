@@ -48,6 +48,7 @@ type Watcher struct {
 
 	handle syscall.Handle
 	change syscall.Handle // manual reset: a change completed
+	nudge  syscall.Handle // manual reset: scan now
 	quit   syscall.Handle // manual reset: stop the loop
 
 	ledger *Ledger
@@ -85,11 +86,19 @@ func Watch(dir string, deliver func(Event)) (*Watcher, error) {
 		procCloseHandle.Call(uintptr(change))
 		return nil, err
 	}
+	nudge, err := createEvent()
+	if err != nil {
+		procCloseHandle.Call(uintptr(handle))
+		procCloseHandle.Call(uintptr(change))
+		procCloseHandle.Call(uintptr(quit))
+		return nil, err
+	}
 	w := &Watcher{
 		dir:     dir,
 		deliver: deliver,
 		handle:  handle,
 		change:  change,
+		nudge:   nudge,
 		quit:    quit,
 		ledger:  NewLedger(),
 		buffer:  make([]byte, 4096),
@@ -105,6 +114,15 @@ func (w *Watcher) Close() {
 	w.once.Do(func() { procSetEvent.Call(uintptr(w.quit)) })
 }
 
+// Nudge asks the watcher to read the directory now. A producer's wake uses it,
+// so a change notification that was missed cannot lose a completion.
+func (w *Watcher) Nudge() {
+	if w == nil {
+		return
+	}
+	procSetEvent.Call(uintptr(w.nudge))
+}
+
 // Done is closed when the watcher's goroutine has stopped.
 func (w *Watcher) Done() <-chan struct{} { return w.done }
 
@@ -112,6 +130,7 @@ func (w *Watcher) run() {
 	defer close(w.done)
 	defer procCloseHandle.Call(uintptr(w.handle))
 	defer procCloseHandle.Call(uintptr(w.change))
+	defer procCloseHandle.Call(uintptr(w.nudge))
 	defer procCloseHandle.Call(uintptr(w.quit))
 
 	// Arm first, then read what is there: files a producer wrote while the
@@ -124,10 +143,10 @@ func (w *Watcher) run() {
 	}
 	w.scan()
 
-	handles := []syscall.Handle{w.change, w.quit}
+	handles := []syscall.Handle{w.change, w.nudge, w.quit}
 	for {
 		wait, _, _ := procWaitForMultipleObjects.Call(
-			2,
+			3,
 			uintptr(unsafe.Pointer(&handles[0])),
 			0,
 			waitTimeoutInfinite,
@@ -142,6 +161,9 @@ func (w *Watcher) run() {
 				return
 			}
 		case waitObject0 + 1:
+			procResetEvent.Call(uintptr(w.nudge))
+			w.scan()
+		case waitObject0 + 2:
 			procCancelIoEx.Call(uintptr(w.handle), uintptr(unsafe.Pointer(overlapped)))
 			var done uint32
 			procGetOverlappedResult.Call(
@@ -215,14 +237,9 @@ func (w *Watcher) scan() {
 		return found[i].CompletedAt.Before(found[j].CompletedAt)
 	})
 	for _, event := range found {
-		w.ledger.Accept(event, now)
-	}
-	for {
-		event, ok := w.ledger.Next(now)
-		if !ok {
-			return
+		if w.ledger.Accept(event, now) {
+			w.deliver(event)
 		}
-		w.deliver(event)
 	}
 }
 

@@ -21,9 +21,12 @@ const (
 	// bandThickness is in physical pixels; at 150% it reads as about 43
 	// logical pixels.
 	bandThickness = 64
-	cueDuration   = 3 * time.Second
 	frameInterval = 16 // ms
 )
+
+// CueDuration is how long one cue's animation lasts, fade out included. The
+// player keeps its queue in step with it.
+const CueDuration = 3 * time.Second
 
 // band is one edge window and the bitmap it shows.
 type band struct {
@@ -77,6 +80,15 @@ func (o *Overlay) Show(c color.NRGBA) {
 	}
 	rgb := uintptr(uint32(c.R)<<16 | uint32(c.G)<<8 | uint32(c.B))
 	procPostMessageW.Call(o.hwnds[0], messageCue, rgb, 0)
+}
+
+// Hide takes the cue off the screen at once, as when the user pauses while one
+// is playing. It is safe from any goroutine.
+func (o *Overlay) Hide() {
+	if o == nil || len(o.hwnds) == 0 {
+		return
+	}
+	procPostMessageW.Call(o.hwnds[0], messageHide, 0, 0)
 }
 
 // Close destroys the windows and ends the overlay thread.
@@ -227,17 +239,25 @@ func (o *Overlay) tick() {
 		return
 	}
 	elapsed := time.Since(o.started)
-	if elapsed >= cueDuration {
+	if elapsed >= CueDuration {
 		o.finishCue()
 		return
 	}
-	alpha := breathe(elapsed.Seconds(), cueDuration.Seconds())
+	alpha := breathe(elapsed.Seconds(), CueDuration.Seconds())
 	for _, b := range o.bands {
 		o.commit(b, byte(alpha*255))
 	}
 }
 
 func (o *Overlay) finishCue() {
+	o.stopCue()
+}
+
+// stopCue ends the animation, whether it ran its course or was cut short.
+func (o *Overlay) stopCue() {
+	if !o.playing {
+		return
+	}
 	o.playing = false
 	procKillTimer.Call(o.hwnds[0], timerID)
 	for _, b := range o.bands {
@@ -287,6 +307,9 @@ func wndProc(hwnd, message, wparam, lparam uintptr) uintptr {
 	switch message {
 	case messageCue:
 		o.beginCue(uint32(wparam))
+		return 0
+	case messageHide:
+		o.stopCue()
 		return 0
 	case messageQuit:
 		o.shutdown()

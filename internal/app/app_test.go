@@ -10,21 +10,30 @@ import (
 
 	"github.com/def-peter/cuedex-win/internal/events"
 	"github.com/def-peter/cuedex-win/internal/integrations"
+	"github.com/def-peter/cuedex-win/internal/playback"
 )
 
-func TestCueIsDroppedWhilePaused(t *testing.T) {
+func TestPauseReachesThePlayer(t *testing.T) {
 	a := &App{}
+	a.player = playback.New(func(events.Source) {}, func() {})
+	defer a.player.Close()
+	event := events.Event{Source: events.Codex, EventID: "e", SessionID: "s", CompletedAt: time.Now()}
+
 	a.setPaused(true)
-	a.Cue()
-	if a.state.cueCount != 0 || !a.state.lastCue.IsZero() {
-		t.Fatalf("cue counted while paused: count %d at %v", a.state.cueCount, a.state.lastCue)
+	if a.player.Submit(event) || a.player.Playing() {
+		t.Fatal("a completion was taken while paused")
 	}
 
 	a.setPaused(false)
-	a.Cue()
-	if a.state.cueCount != 1 || a.state.lastCue.IsZero() {
-		t.Fatalf("cue not counted after resuming: count %d", a.state.cueCount)
+	if !a.player.Submit(event) || !a.player.Playing() {
+		t.Fatal("cueing did not resume")
 	}
+}
+
+func TestCueWithoutAWatcherIsHarmless(t *testing.T) {
+	// A second launch can reach the app before the watcher exists; the wake
+	// has nothing to nudge and must not panic.
+	(&App{}).Cue()
 }
 
 // The panel runs without a window in tests, which click as a user would.
@@ -56,16 +65,11 @@ func TestViewShowsLastCue(t *testing.T) {
 	}
 }
 
-func TestPulseRemembersTheSource(t *testing.T) {
+func TestCueStartRecordsTheSource(t *testing.T) {
 	a := &App{}
-	a.pulse(events.OpenCode)
+	a.cueStart(events.OpenCode)
 	if a.state.cueCount != 1 || a.state.lastSource != events.OpenCode {
-		t.Fatalf("after a pulse: %+v", a.state)
-	}
-	// A bare wake leaves the last known source alone.
-	a.Cue()
-	if a.state.cueCount != 2 || a.state.lastSource != events.OpenCode {
-		t.Fatalf("after a bare wake: %+v", a.state)
+		t.Fatalf("after one cue: %+v", a.state)
 	}
 }
 

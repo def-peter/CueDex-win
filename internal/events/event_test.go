@@ -87,7 +87,15 @@ func TestParseRejectsMalformedPayloads(t *testing.T) {
 }
 
 func TestParseIgnoresOtherNames(t *testing.T) {
-	for _, name := range []string{"notes.txt", "cue-codex-x.txt", "turn-complete", "Cue-codex-x.json"} {
+	for _, name := range []string{
+		"notes.txt",
+		"cue-codex-x.txt",
+		"turn-complete",
+		"Cue-codex-x.json",
+		// A producer's half-written file, which it renames into place.
+		"turn-complete.123.tmp",
+		"cue-codex-x.json.TMP",
+	} {
 		if _, err := Parse(name, nil, time.Now()); !errors.Is(err, ErrNotAnEvent) {
 			t.Errorf("%s: err %v, want ErrNotAnEvent", name, err)
 		}

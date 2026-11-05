@@ -67,6 +67,7 @@ const (
 
 	messageCue  = 0x8001 // WM_APP + 1
 	messageQuit = 0x8002 // WM_APP + 2
+	messageHide = 0x8003 // WM_APP + 3
 
 	timerID = 1
 

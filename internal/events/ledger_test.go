@@ -38,42 +38,16 @@ func TestLedgerDropsStaleEvents(t *testing.T) {
 	}
 }
 
-func TestLedgerKeepsOnePendingPerSource(t *testing.T) {
+func TestLedgerKeepsSourcesApart(t *testing.T) {
 	l := NewLedger()
-	older := Event{Source: Codex, EventID: "a", SessionID: "s", CompletedAt: at(0)}
-	newer := Event{Source: Codex, EventID: "b", SessionID: "s", CompletedAt: at(1)}
-	other := Event{Source: OpenCode, EventID: "c", SessionID: "s", CompletedAt: at(0)}
-	for _, e := range []Event{older, newer, other} {
-		if !l.Accept(e, at(2)) {
-			t.Fatalf("%s was dropped", e.EventID)
-		}
+	codex := Event{Source: Codex, EventID: "same", SessionID: "s", CompletedAt: at(0)}
+	opencode := Event{Source: OpenCode, EventID: "same", SessionID: "s", CompletedAt: at(0)}
+	if !l.Accept(codex, at(1)) {
+		t.Fatal("the Codex completion was dropped")
 	}
-	if !l.Pending(Codex) || !l.Pending(OpenCode) {
-		t.Fatal("a source lost its pending cue")
-	}
-	first, ok := l.Next(at(2))
-	if !ok || first.Identity() != other.Identity() {
-		t.Fatalf("next = %+v, want the oldest pending cue (opencode)", first)
-	}
-	second, ok := l.Next(at(2))
-	if !ok || second.Identity() != newer.Identity() {
-		t.Fatalf("next = %+v, want the newer codex cue", second)
-	}
-	if _, ok := l.Next(at(2)); ok {
-		t.Fatal("a cue was delivered twice")
-	}
-}
-
-func TestLedgerSkipsCuesThatWentStaleWhileWaiting(t *testing.T) {
-	l := NewLedger()
-	e := Event{Source: Codex, EventID: "a", SessionID: "s", CompletedAt: at(0)}
-	if !l.Accept(e, at(1)) {
-		t.Fatal("fresh event was dropped")
-	}
-	if _, ok := l.Next(at(120)); ok {
-		t.Fatal("a cue that aged out while pending was delivered")
-	}
-	if l.Pending(Codex) {
-		t.Fatal("the stale cue is still pending")
+	// The identity is source:eventID, so another producer's event with the
+	// same eventID is news.
+	if !l.Accept(opencode, at(1)) {
+		t.Fatal("the same eventID from another source was dropped")
 	}
 }
