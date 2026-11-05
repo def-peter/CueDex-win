@@ -20,7 +20,16 @@ import (
 	"github.com/def-peter/cuedex-win/internal/overlay"
 	"github.com/def-peter/cuedex-win/internal/paths"
 	"github.com/def-peter/cuedex-win/internal/playback"
+	"github.com/def-peter/cuedex-win/internal/prefs"
+	"github.com/def-peter/cuedex-win/internal/sound"
 )
+
+// audio is the part of the sound player the app uses, so a test can hear what
+// it was asked to play without a device.
+type audio interface {
+	Play(id string, volume int) error
+	Stop()
+}
 
 // App owns the tray icon, the settings panel, and everything the panels show.
 // Its state is read and changed on the main thread only.
@@ -31,9 +40,15 @@ type App struct {
 	overlay  *overlay.Overlay
 	watch    *events.Watcher
 	player   *playback.Player
+	audio    audio
 	codex    integrations.CodexIntegration
 	opencode integrations.OpenCodeIntegration
-	state    settings
+	prefs    prefs.Preferences
+	// prefsPath is where the choices are saved.
+	prefsPath string
+	// saveTimer debounces the save while a slider is being dragged.
+	saveTimer *time.Timer
+	state     settings
 }
 
 // New returns an app that keeps its files in dir and installs hooks that run
@@ -47,6 +62,10 @@ func New(dir paths.Dir, exe string) *App {
 	if err != nil {
 		configDir = ""
 	}
+	stored, err := prefs.Load(dir.Preferences())
+	if err != nil {
+		log.Printf("cuedex: %v", err)
+	}
 	a := &App{
 		dir:   dir,
 		codex: integrations.CodexIntegration{Home: home, Exe: exe},
@@ -56,7 +75,11 @@ func New(dir paths.Dir, exe string) *App {
 			GatePath:  dir.OpenCodeGate(),
 			Exe:       exe,
 		},
+		audio:     &sound.Player{},
+		prefs:     stored,
+		prefsPath: dir.Preferences(),
 	}
+	a.state.applySound(stored)
 	// The player decides when a cue runs; the drawing and the counters are the
 	// main thread's, so its callbacks marshal there.
 	a.player = playback.New(
@@ -67,6 +90,8 @@ func New(dir paths.Dir, exe string) *App {
 	a.state.onClose = a.hide
 	a.state.onToggleCodex = a.toggleCodex
 	a.state.onToggleOpenCode = a.toggleOpenCode
+	a.state.onChangeSound = a.changeSound
+	a.state.onPreviewSound = a.previewSound
 	return a
 }
 
@@ -137,6 +162,12 @@ func (a *App) Ready() {
 		if a.overlay != nil {
 			a.overlay.Close()
 		}
+		a.audio.Stop()
+		if a.saveTimer != nil {
+			a.saveTimer.Stop()
+			a.saveTimer = nil
+		}
+		a.savePrefs()
 		if a.tray != nil {
 			a.tray.Destroy()
 		}
@@ -150,7 +181,7 @@ func (a *App) newWindow() *mygo.Window {
 	w := mygo.NewWindow(mygo.WindowOptions{
 		Title:             "CueDex",
 		Width:             420,
-		Height:            470,
+		Height:            660,
 		Frameless:         true,
 		DisableResize:     true,
 		DisableMinimize:   true,
@@ -187,6 +218,13 @@ func (a *App) cueStart(source events.Source) {
 	if a.overlay != nil {
 		a.overlay.Show(sourceColour(source))
 	}
+	choice := a.prefs.For(source)
+	if a.audio != nil {
+		if err := a.audio.Play(choice.ID, choice.Volume); err != nil {
+			log.Printf("cuedex: %v", err)
+			a.state.soundProblem = "提示音播放失败：" + err.Error()
+		}
+	}
 	if a.win != nil {
 		a.win.Invalidate()
 	}
@@ -196,6 +234,53 @@ func (a *App) cueStart(source events.Source) {
 func (a *App) cueStop() {
 	if a.overlay != nil {
 		a.overlay.Hide()
+	}
+	if a.audio != nil {
+		a.audio.Stop()
+	}
+}
+
+// changeSound stores the choice the panel just made. The next cue uses it; the
+// file is written a moment later, so dragging a slider is one save.
+func (a *App) changeSound(source events.Source) {
+	a.prefs = a.prefs.Set(source, a.state.choice(source))
+	if a.saveTimer != nil {
+		a.saveTimer.Stop()
+	}
+	a.saveTimer = time.AfterFunc(400*time.Millisecond, func() {
+		mygo.RunOnMain(func() {
+			a.saveTimer = nil
+			a.savePrefs()
+		})
+	})
+}
+
+// previewSound plays the chosen sound without waiting for a completion.
+func (a *App) previewSound(source events.Source) {
+	choice := a.prefs.For(source)
+	if a.audio == nil {
+		return
+	}
+	if err := a.audio.Play(choice.ID, choice.Volume); err != nil {
+		log.Printf("cuedex: %v", err)
+		a.state.soundProblem = "提示音播放失败：" + err.Error()
+		a.invalidate()
+		return
+	}
+	a.state.soundProblem = ""
+	a.invalidate()
+}
+
+// savePrefs writes the choices out. A failure is shown in the panel rather than
+// ending the app: cueing still works from memory.
+func (a *App) savePrefs() {
+	if a.prefsPath == "" {
+		return
+	}
+	if err := prefs.Save(a.prefsPath, a.prefs); err != nil {
+		log.Printf("cuedex: save preferences: %v", err)
+		a.state.soundProblem = "偏好保存失败：" + err.Error()
+		a.invalidate()
 	}
 }
 

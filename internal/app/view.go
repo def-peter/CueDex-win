@@ -2,11 +2,14 @@ package app
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/egoist/mygo/ui"
 
 	"github.com/def-peter/cuedex-win/internal/events"
+	"github.com/def-peter/cuedex-win/internal/prefs"
+	"github.com/def-peter/cuedex-win/internal/sound"
 )
 
 // settings is the state the panel shows and the two actions it offers. It has
@@ -27,11 +30,68 @@ type settings struct {
 	opencodeVersion   string
 	opencodeProblem   string
 
+	codexSound    soundSettings
+	opencodeSound soundSettings
+	soundProblem  string
+
 	onTogglePause func()
 	onClose       func()
 	onToggleCodex func()
 
 	onToggleOpenCode func()
+	onChangeSound    func(events.Source)
+	onPreviewSound   func(events.Source)
+}
+
+// soundSettings is one producer's controls: which bundled sound, and how loud.
+// The index lives in a field because a widget binds to an address.
+type soundSettings struct {
+	sound  int     // index into sound.All()
+	volume float64 // 0-100
+}
+
+func (s *soundSettings) apply(choice prefs.SoundChoice) {
+	s.sound = soundIndex(choice.ID)
+	s.volume = float64(choice.Volume)
+}
+
+func (s *soundSettings) choice() prefs.SoundChoice {
+	all := sound.All()
+	index := s.sound
+	if index < 0 || index >= len(all) {
+		index = 0
+	}
+	volume := int(math.Round(s.volume))
+	if volume < 0 {
+		volume = 0
+	}
+	if volume > 100 {
+		volume = 100
+	}
+	return prefs.SoundChoice{ID: all[index].ID, Volume: volume}
+}
+
+// applySound fills the panel from the saved choices.
+func (s *settings) applySound(p prefs.Preferences) {
+	s.codexSound.apply(p.Sound.Codex)
+	s.opencodeSound.apply(p.Sound.OpenCode)
+}
+
+// choice is what the panel currently says for a producer.
+func (s *settings) choice(source events.Source) prefs.SoundChoice {
+	if source == events.OpenCode {
+		return s.opencodeSound.choice()
+	}
+	return s.codexSound.choice()
+}
+
+func soundIndex(id string) int {
+	for i, s := range sound.All() {
+		if s.ID == id {
+			return i
+		}
+	}
+	return 0
 }
 
 func (s *settings) view(c *ui.Context) {
@@ -57,6 +117,14 @@ func (s *settings) view(c *ui.Context) {
 			status = fmt.Sprintf("最近一次唤醒 %s%s，共 %d 次", s.lastCue.Format("15:04:05"), from, s.cueCount)
 		}
 		ui.Text(c, status).FontSize(12).TextColor(t.TextMuted)
+		ui.Spacer(c)
+		ui.Text(c, "提示音").FontSize(14).Bold()
+		ui.Text(c, "每条提示最多响一次；音量 0 等同静音，不影响发光").FontSize(12).TextColor(t.TextMuted)
+		s.soundControls(c, events.Codex, "Codex", &s.codexSound)
+		s.soundControls(c, events.OpenCode, "OpenCode", &s.opencodeSound)
+		if s.soundProblem != "" {
+			ui.Text(c, s.soundProblem).FontSize(12).TextColor(t.TextMuted)
+		}
 		ui.Spacer(c)
 		ui.Text(c, "Codex 集成").FontSize(14).Bold()
 		ui.Text(c, s.codexDetail()).FontSize(12).TextColor(t.TextMuted)
@@ -96,6 +164,34 @@ func (s *settings) view(c *ui.Context) {
 				s.onClose()
 			}
 		})
+	})
+}
+
+// soundControls is one producer's two rows: the sound itself, then its volume.
+// The preview plays the choice right away, without a completion.
+func (s *settings) soundControls(c *ui.Context, source events.Source, label string, controls *soundSettings) {
+	ui.Row(c).Gap(8).Children(func() {
+		ui.Text(c, label).FontSize(12).Width(64)
+		ui.Segmented(c, &controls.sound, sound.Labels()...).OnChange(func() {
+			if s.onChangeSound != nil {
+				s.onChangeSound(source)
+			}
+		})
+		ui.Spacer(c)
+		ui.Button(c, "试听").OnClick(func() {
+			if s.onPreviewSound != nil {
+				s.onPreviewSound(source)
+			}
+		})
+	})
+	ui.Row(c).Gap(8).Children(func() {
+		ui.Text(c, "音量").FontSize(12).Width(64)
+		ui.Slider(c, &controls.volume, 0, 100).Grow(1).OnChange(func() {
+			if s.onChangeSound != nil {
+				s.onChangeSound(source)
+			}
+		})
+		ui.Text(c, fmt.Sprintf("%d%%", int(math.Round(controls.volume)))).FontSize(12).Width(44)
 	})
 }
 

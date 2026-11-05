@@ -28,6 +28,9 @@ func (d Dir) Events() string { return filepath.Join(d.Root, "Events") }
 // loaded stops as soon as the gate is gone.
 func (d Dir) OpenCodeGate() string { return filepath.Join(d.Root, "opencode-gate") }
 
+// Preferences is the file the user's choices live in.
+func (d Dir) Preferences() string { return filepath.Join(d.Root, "preferences.json") }
+
 // Prepare creates the directories the app needs on first run.
 func (d Dir) Prepare() error {
 	for _, dir := range []string{d.Root, d.Events()} {
