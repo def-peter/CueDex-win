@@ -1,9 +1,9 @@
-// Package overlay draws the cue: four glowing edges on the primary display,
-// each a Win32 layered window carrying a pre-rendered bitmap.
+// Package overlay draws the cue: four glowing edges on every display, each a
+// Win32 layered window carrying a pre-rendered bitmap.
 //
 // MyGo's own windows cost tens of megabytes each and take hundreds of
 // milliseconds to paint after being hidden, so the overlay talks to user32
-// directly: the bitmaps are made once, and every frame only changes one
+// directly: a cue paints each band once, and every frame only changes one
 // alpha byte.
 package overlay
 
@@ -18,25 +18,79 @@ import (
 )
 
 const (
-	// bandThickness is in physical pixels; at 150% it reads as about 43
-	// logical pixels.
+	// bandThickness is the glow's width at 96 DPI, in physical pixels. A
+	// display at another scale gets it multiplied by its DPI, so the glow
+	// looks the same width everywhere.
 	bandThickness = 64
-	frameInterval = 16 // ms
+	// frameInterval is 33 ms: every frame re-blends the whole band, and at
+	// 30 frames a second the cue is smooth while staying inside the CPU
+	// budget in HANDOFF.md. Measured on this machine, 60 fps costs about
+	// twice as much for no visible gain.
+	frameInterval = 33 // ms
 )
 
 // CueDuration is how long one cue's animation lasts, fade out included. The
 // player keeps its queue in step with it.
 const CueDuration = 3 * time.Second
 
-// band is one edge window and the bitmap it shows.
+// Animation is how a cue moves.
+type Animation int
+
+const (
+	// Breathing pulses one colour twice and fades out.
+	Breathing Animation = iota
+	// AlternatingFlash blinks the primary colour twice, then the secondary
+	// twice, staying lit in between.
+	AlternatingFlash
+)
+
+// String is what a log or a test failure reads.
+func (a Animation) String() string {
+	if a == AlternatingFlash {
+		return "alternating-flash"
+	}
+	return "breathing"
+}
+
+// Valid reports whether the value is one this package draws.
+func (a Animation) Valid() bool { return a == Breathing || a == AlternatingFlash }
+
+// Cue is one completion's presentation: the primary colour, the second colour
+// the flash alternates with, and the animation.
+type Cue struct {
+	Primary   color.NRGBA
+	Secondary color.NRGBA
+	Animation Animation
+}
+
+// band is one edge window: one colour, one window. The bitmap is made when a
+// cue paints it and freed as soon as the window has it, because the layered
+// window keeps its own copy: a 3-second cue then holds a few megabytes of
+// surfaces instead of the tens a resident bitmap per band would cost.
 type band struct {
-	hwnd   uintptr
-	hdc    uintptr
-	bitmap uintptr
-	bits   unsafe.Pointer
-	width  int32
-	height int32
-	edge   Edge
+	hwnd      uintptr
+	width     int32
+	height    int32
+	edge      Edge
+	thickness int32
+}
+
+// display is one monitor's bands. Each edge has two windows, one per cue
+// colour; the flash alternates them by alpha, so a handover never uploads a
+// bitmap.
+type display struct {
+	bounds    rect
+	dpi       uint32
+	primary   []*band
+	secondary []*band
+}
+
+// bands returns the set holding one of the two cue colours.
+func (d display) bands(second bool) []*band {
+	if second {
+		return d.secondary
+	}
+	return d.primary
 }
 
 // Overlay owns the windows and the animation timer on one OS thread.
@@ -44,14 +98,24 @@ type Overlay struct {
 	ready chan struct{}
 	err   error
 
-	hwnds []uintptr // set before ready is closed
+	// messageWindow receives the overlay's messages: the first band's
+	// handle. It is zero until the windows exist and after a failed start.
+	messageWindow uintptr
+
+	// mu guards the fields a caller on another goroutine touches.
+	mu      sync.Mutex
+	pending Cue
+	queued  bool
 
 	// Owned by the overlay thread once it is running.
-	bands    []*band
-	screenDC uintptr
-	started  time.Time
-	playing  bool
-	alpha    byte
+	displays  []display
+	signature string
+	screenDC  uintptr
+	started   time.Time
+	playing   bool
+	current   Cue
+	// secondary says which of the two colours is being shown.
+	secondary bool
 
 	closeOnce sync.Once
 	done      chan struct{}
@@ -72,23 +136,36 @@ func Start() (*Overlay, error) {
 	return o, nil
 }
 
-// Show plays one cue in the given colour. It is safe from any goroutine and
+// Show plays one cue, on every display. It is safe from any goroutine and
 // restarts the animation if one is already running.
-func (o *Overlay) Show(c color.NRGBA) {
-	if o == nil || len(o.hwnds) == 0 {
+func (o *Overlay) Show(c Cue) {
+	if o == nil {
 		return
 	}
-	rgb := uintptr(uint32(c.R)<<16 | uint32(c.G)<<8 | uint32(c.B))
-	procPostMessageW.Call(o.hwnds[0], messageCue, rgb, 0)
+	o.mu.Lock()
+	o.pending = c
+	o.queued = true
+	window := o.messageWindow
+	o.mu.Unlock()
+	if window == 0 {
+		return
+	}
+	procPostMessageW.Call(window, messageCue, 0, 0)
 }
 
 // Hide takes the cue off the screen at once, as when the user pauses while one
 // is playing. It is safe from any goroutine.
 func (o *Overlay) Hide() {
-	if o == nil || len(o.hwnds) == 0 {
+	if o == nil {
 		return
 	}
-	procPostMessageW.Call(o.hwnds[0], messageHide, 0, 0)
+	o.mu.Lock()
+	window := o.messageWindow
+	o.mu.Unlock()
+	if window == 0 {
+		return
+	}
+	procPostMessageW.Call(window, messageHide, 0, 0)
 }
 
 // Close destroys the windows and ends the overlay thread.
@@ -97,8 +174,11 @@ func (o *Overlay) Close() {
 		return
 	}
 	o.closeOnce.Do(func() {
-		if len(o.hwnds) > 0 {
-			procPostMessageW.Call(o.hwnds[0], messageQuit, 0, 0)
+		o.mu.Lock()
+		window := o.messageWindow
+		o.mu.Unlock()
+		if window != 0 {
+			procPostMessageW.Call(window, messageQuit, 0, 0)
 		}
 		<-o.done
 	})
@@ -130,12 +210,6 @@ func (o *Overlay) run() {
 		}
 	}
 
-	bounds, ok := primaryMonitor()
-	if !ok {
-		o.err = fmt.Errorf("overlay: no primary monitor")
-		close(o.ready)
-		return
-	}
 	o.screenDC, _, _ = procGetDC.Call(0)
 	if o.screenDC == 0 {
 		o.err = fmt.Errorf("overlay: no screen device context")
@@ -143,18 +217,7 @@ func (o *Overlay) run() {
 		return
 	}
 
-	edges := []Edge{EdgeTop, EdgeBottom, EdgeLeft, EdgeRight}
-	for _, edge := range edges {
-		r := edgeRect(bounds, edge, bandThickness)
-		b, err := o.newBand(r, edge)
-		if err != nil {
-			o.err = err
-			close(o.ready)
-			return
-		}
-		o.bands = append(o.bands, b)
-		o.hwnds = append(o.hwnds, b.hwnd)
-	}
+	o.buildDisplays()
 	close(o.ready)
 
 	var m msg
@@ -168,8 +231,65 @@ func (o *Overlay) run() {
 	}
 }
 
-func (o *Overlay) newBand(r rect, edge Edge) (*band, error) {
-	hwnd, _, err := procCreateWindowExW.Call(
+// buildDisplays makes the bands for the current display configuration. Every
+// monitor gets its own rectangles, in its own physical pixels.
+func (o *Overlay) buildDisplays() {
+	o.destroyDisplays()
+	o.signature = ""
+	for _, m := range monitors() {
+		t := thicknessFor(m.dpi)
+		d := display{bounds: m.bounds, dpi: m.dpi}
+		for _, edge := range []Edge{EdgeTop, EdgeBottom, EdgeLeft, EdgeRight} {
+			r := edgeRect(m.bounds, edge, t)
+			d.primary = append(d.primary, o.newBand(r, edge, t))
+			d.secondary = append(d.secondary, o.newBand(r, edge, t))
+		}
+		o.displays = append(o.displays, d)
+		o.signature += signaturePart(m)
+	}
+	o.mu.Lock()
+	if len(o.displays) > 0 && len(o.displays[0].primary) > 0 {
+		o.messageWindow = o.displays[0].primary[0].hwnd
+	} else {
+		o.messageWindow = 0
+	}
+	o.mu.Unlock()
+}
+
+// thicknessFor reads the band width at a display's scale.
+func thicknessFor(dpi uint32) int32 {
+	if dpi == 0 {
+		dpi = 96
+	}
+	t := int32(bandThickness * int(dpi) / 96)
+	if t < bandThickness/2 {
+		t = bandThickness / 2
+	}
+	return t
+}
+
+func signaturePart(m monitor) string {
+	b := m.bounds
+	return fmt.Sprintf("%d,%d,%d,%d@%d;", b.Left, b.Top, b.Right, b.Bottom, m.dpi)
+}
+
+// syncDisplays rebuilds the bands when the display configuration differs from
+// what is on screen. It is cheap when nothing changed, which is the common
+// case: two EnumDisplayMonitors calls per cue.
+func (o *Overlay) syncDisplays() {
+	monitorList := monitors()
+	sig := ""
+	for _, m := range monitorList {
+		sig += signaturePart(m)
+	}
+	if sig == o.signature && len(o.displays) == len(monitorList) {
+		return
+	}
+	o.buildDisplays()
+}
+
+func (o *Overlay) newBand(r rect, edge Edge, thickness int32) *band {
+	hwnd, _, _ := procCreateWindowExW.Call(
 		wsExLayered|wsExTransparent|wsExToolWindow|wsExTopmost|wsExNoActivate,
 		uintptr(unsafe.Pointer(utf16("CueDexOverlay"))),
 		uintptr(unsafe.Pointer(utf16("CueDex"))),
@@ -178,25 +298,37 @@ func (o *Overlay) newBand(r rect, edge Edge) (*band, error) {
 		0, 0, 0, 0,
 	)
 	if hwnd == 0 {
-		return nil, fmt.Errorf("overlay: create window: %w", err)
+		return nil
 	}
 	procSetWindowPos.Call(hwnd, hwndTopmost, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
 
-	hdc, _, _ := procCreateCompatibleDC.Call(o.screenDC)
+	return &band{
+		hwnd:      hwnd,
+		width:     r.width(),
+		height:    r.height(),
+		edge:      edge,
+		thickness: thickness,
+	}
+}
+
+// surface paints one band into a fresh bitmap. The bitmap is discarded once the
+// window has it.
+func (o *Overlay) surface(b *band, c color.NRGBA) (hdc, bitmap uintptr) {
+	hdc, _, _ = procCreateCompatibleDC.Call(o.screenDC)
 	if hdc == 0 {
-		return nil, fmt.Errorf("overlay: create device context")
+		return 0, 0
 	}
 
 	header := bitmapInfoHeader{
 		Size:        uint32(unsafe.Sizeof(bitmapInfoHeader{})),
-		Width:       r.width(),
-		Height:      -r.height(), // top-down rows
+		Width:       b.width,
+		Height:      -b.height, // top-down rows
 		Planes:      1,
 		BitCount:    32,
 		Compression: biRGB,
 	}
 	var bits unsafe.Pointer
-	bitmap, _, _ := procCreateDIBSection.Call(
+	bitmap, _, _ = procCreateDIBSection.Call(
 		hdc,
 		uintptr(unsafe.Pointer(&header)),
 		biRGB,
@@ -204,36 +336,91 @@ func (o *Overlay) newBand(r rect, edge Edge) (*band, error) {
 		0, 0,
 	)
 	if bitmap == 0 || bits == nil {
-		return nil, fmt.Errorf("overlay: create bitmap")
+		procDeleteDC.Call(hdc)
+		return 0, 0
 	}
 	procSelectObject.Call(hdc, bitmap)
 
-	return &band{
-		hwnd:   hwnd,
-		hdc:    hdc,
-		bitmap: bitmap,
-		bits:   bits,
-		width:  r.width(),
-		height: r.height(),
-		edge:   edge,
-	}, nil
+	fillBand(unsafe.Slice((*byte)(bits), int(b.width)*int(b.height)*4),
+		int(b.width), int(b.height), b.edge, c, float64(b.thickness))
+	return hdc, bitmap
 }
 
-// beginCue starts the animation in a colour packed as 0xRRGGBB.
-func (o *Overlay) beginCue(rgb uint32) {
-	c := color.NRGBA{R: byte(rgb >> 16), G: byte(rgb >> 8), B: byte(rgb), A: 255}
-	for _, b := range o.bands {
-		pixels := bandPixels(int(b.width), int(b.height), b.edge, c, bandThickness)
-		copy(unsafe.Slice((*byte)(b.bits), len(pixels)), pixels)
-		o.commit(b, 0)
-		procShowWindow.Call(b.hwnd, swShowNoActivate)
+// release frees a surface made by surface.
+func (o *Overlay) release(hdc, bitmap uintptr) {
+	if hdc == 0 {
+		return
 	}
+	procDeleteDC.Call(hdc)
+	if bitmap != 0 {
+		procDeleteObject.Call(bitmap)
+	}
+}
+
+// beginCue starts the animation. Every display shows the same colours.
+func (o *Overlay) beginCue(c Cue) {
+	if !c.Animation.Valid() {
+		c.Animation = Breathing
+	}
+	o.stopCue()
+	o.syncDisplays()
+	if len(o.displays) == 0 {
+		return
+	}
+	flash := c.Animation == AlternatingFlash
+	for _, d := range o.displays {
+		for _, b := range d.primary {
+			o.show(b, c.Primary)
+		}
+		for _, b := range d.secondary {
+			if flash {
+				o.show(b, c.Secondary)
+			} else {
+				procShowWindow.Call(b.hwnd, swHide)
+			}
+		}
+	}
+	o.current = c
 	o.started = time.Now()
 	o.playing = true
-	procSetTimer.Call(o.hwnds[0], timerID, frameInterval, 0)
+	o.secondary = false
+	o.setTimer()
 }
 
-// tick advances the animation one frame and ends it after cueDuration.
+// show paints a band with its colour and puts it on screen at zero alpha, so
+// the first frame never reveals a previous cue's pixels.
+func (o *Overlay) show(b *band, c color.NRGBA) {
+	if b == nil {
+		return
+	}
+	hdc, bitmap := o.surface(b, c)
+	if hdc == 0 {
+		return
+	}
+	o.upload(b, hdc, 0)
+	o.release(hdc, bitmap)
+	procShowWindow.Call(b.hwnd, swShowNoActivate)
+}
+
+func (o *Overlay) setTimer() {
+	o.mu.Lock()
+	window := o.messageWindow
+	o.mu.Unlock()
+	if window != 0 {
+		procSetTimer.Call(window, timerID, frameInterval, 0)
+	}
+}
+
+func (o *Overlay) killTimer() {
+	o.mu.Lock()
+	window := o.messageWindow
+	o.mu.Unlock()
+	if window != 0 {
+		procKillTimer.Call(window, timerID)
+	}
+}
+
+// tick advances the animation one frame and ends it after CueDuration.
 func (o *Overlay) tick() {
 	if !o.playing {
 		return
@@ -243,9 +430,32 @@ func (o *Overlay) tick() {
 		o.finishCue()
 		return
 	}
-	alpha := breathe(elapsed.Seconds(), CueDuration.Seconds())
-	for _, b := range o.bands {
-		o.commit(b, byte(alpha*255))
+	envelope, primary, secondary := sample(o.current.Animation, elapsed)
+	// One colour is lit at a time. The handover falls where the outgoing
+	// share is zero, so taking that set off the screen is invisible.
+	second := o.current.Animation == AlternatingFlash && flashPhase(elapsed) >= 0.5
+	if second != o.secondary {
+		o.secondary = second
+		o.dim(!second)
+	}
+	share := primary
+	if second {
+		share = secondary
+	}
+	alpha := byte(envelope * share * 255)
+	for _, d := range o.displays {
+		for _, b := range d.bands(second) {
+			o.commit(b, alpha)
+		}
+	}
+}
+
+// dim takes one colour set off the screen.
+func (o *Overlay) dim(second bool) {
+	for _, d := range o.displays {
+		for _, b := range d.bands(second) {
+			o.commit(b, 0)
+		}
 	}
 }
 
@@ -259,14 +469,19 @@ func (o *Overlay) stopCue() {
 		return
 	}
 	o.playing = false
-	procKillTimer.Call(o.hwnds[0], timerID)
-	for _, b := range o.bands {
-		procShowWindow.Call(b.hwnd, swHide)
+	o.killTimer()
+	for _, d := range o.displays {
+		for _, b := range d.primary {
+			procShowWindow.Call(b.hwnd, swHide)
+		}
+		for _, b := range d.secondary {
+			procShowWindow.Call(b.hwnd, swHide)
+		}
 	}
 }
 
-// commit pushes one band's bitmap to its window with the given global alpha.
-func (o *Overlay) commit(b *band, alpha byte) {
+// upload gives a band's window the bitmap in srcDC, at the given alpha.
+func (o *Overlay) upload(b *band, srcDC uintptr, alpha byte) {
 	sz := size{CX: b.width, CY: b.height}
 	src := point{}
 	blend := blendFunction{
@@ -277,19 +492,62 @@ func (o *Overlay) commit(b *band, alpha byte) {
 	procUpdateLayeredWindow.Call(
 		b.hwnd, o.screenDC,
 		0, uintptr(unsafe.Pointer(&sz)),
-		b.hdc, uintptr(unsafe.Pointer(&src)),
+		srcDC, uintptr(unsafe.Pointer(&src)),
 		0, uintptr(unsafe.Pointer(&blend)),
 		ulwAlpha,
 	)
 }
 
-func (o *Overlay) shutdown() {
-	procKillTimer.Call(o.hwnds[0], timerID)
-	for _, b := range o.bands {
-		procDestroyWindow.Call(b.hwnd)
-		procDeleteObject.Call(b.bitmap)
-		procDeleteDC.Call(b.hdc)
+// commit changes one band's global alpha. The window already holds its pixels,
+// so no source is given; only a single pixel is marked dirty, so the frame costs
+// a call rather than a copy of the whole band.
+func (o *Overlay) commit(b *band, alpha byte) {
+	sz := size{CX: b.width, CY: b.height}
+	blend := blendFunction{
+		BlendOp:             acSrcOver,
+		SourceConstantAlpha: alpha,
+		AlphaFormat:         acSrcAlpha,
 	}
+	dirty := rect{0, 0, 1, 1}
+	info := updateLayeredWindowInfo{
+		Size:    uint32(unsafe.Sizeof(updateLayeredWindowInfo{})),
+		DstDC:   o.screenDC,
+		WndSize: &sz,
+		Blend:   &blend,
+		Flags:   ulwAlpha,
+		Dirty:   &dirty,
+	}
+	procUpdateLayeredWindowIndirect.Call(b.hwnd, uintptr(unsafe.Pointer(&info)))
+}
+
+// displayChanged recomputes the geometry after a resolution or scale change or
+// a monitor being plugged in or out. A cue that is playing restarts, because
+// its bitmaps belong to the old geometry.
+func (o *Overlay) displayChanged() {
+	cue := o.current
+	playing := o.playing
+	o.stopCue()
+	o.buildDisplays()
+	if playing {
+		o.beginCue(cue)
+	}
+}
+
+func (o *Overlay) destroyDisplays() {
+	for _, d := range o.displays {
+		for _, b := range append(append([]*band{}, d.primary...), d.secondary...) {
+			if b == nil {
+				continue
+			}
+			procDestroyWindow.Call(b.hwnd)
+		}
+	}
+	o.displays = nil
+}
+
+func (o *Overlay) shutdown() {
+	o.stopCue()
+	o.destroyDisplays()
 	if o.screenDC != 0 {
 		procReleaseDC.Call(0, o.screenDC)
 		o.screenDC = 0
@@ -306,7 +564,13 @@ func wndProc(hwnd, message, wparam, lparam uintptr) uintptr {
 	}
 	switch message {
 	case messageCue:
-		o.beginCue(uint32(wparam))
+		o.mu.Lock()
+		cue, queued := o.pending, o.queued
+		o.queued = false
+		o.mu.Unlock()
+		if queued {
+			o.beginCue(cue)
+		}
 		return 0
 	case messageHide:
 		o.stopCue()
@@ -316,6 +580,9 @@ func wndProc(hwnd, message, wparam, lparam uintptr) uintptr {
 		return 0
 	case wmTimer:
 		o.tick()
+		return 0
+	case wmDisplayChange:
+		o.displayChanged()
 		return 0
 	case wmNcHitTest:
 		return htTransparent

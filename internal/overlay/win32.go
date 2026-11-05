@@ -9,25 +9,29 @@ var (
 	user32   = syscall.NewLazyDLL("user32.dll")
 	gdi32    = syscall.NewLazyDLL("gdi32.dll")
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
+	shcore   = syscall.NewLazyDLL("shcore.dll")
 
-	procRegisterClassExW    = user32.NewProc("RegisterClassExW")
-	procCreateWindowExW     = user32.NewProc("CreateWindowExW")
-	procDefWindowProcW      = user32.NewProc("DefWindowProcW")
-	procDestroyWindow       = user32.NewProc("DestroyWindow")
-	procShowWindow          = user32.NewProc("ShowWindow")
-	procUpdateLayeredWindow = user32.NewProc("UpdateLayeredWindow")
-	procSetTimer            = user32.NewProc("SetTimer")
-	procKillTimer           = user32.NewProc("KillTimer")
-	procGetMessageW         = user32.NewProc("GetMessageW")
-	procTranslateMessage    = user32.NewProc("TranslateMessage")
-	procDispatchMessageW    = user32.NewProc("DispatchMessageW")
-	procPostMessageW        = user32.NewProc("PostMessageW")
-	procPostQuitMessage     = user32.NewProc("PostQuitMessage")
-	procSetWindowPos        = user32.NewProc("SetWindowPos")
-	procEnumDisplayMonitors = user32.NewProc("EnumDisplayMonitors")
-	procGetMonitorInfoW     = user32.NewProc("GetMonitorInfoW")
-	procGetDC               = user32.NewProc("GetDC")
-	procReleaseDC           = user32.NewProc("ReleaseDC")
+	procRegisterClassExW            = user32.NewProc("RegisterClassExW")
+	procCreateWindowExW             = user32.NewProc("CreateWindowExW")
+	procDefWindowProcW              = user32.NewProc("DefWindowProcW")
+	procDestroyWindow               = user32.NewProc("DestroyWindow")
+	procShowWindow                  = user32.NewProc("ShowWindow")
+	procUpdateLayeredWindow         = user32.NewProc("UpdateLayeredWindow")
+	procUpdateLayeredWindowIndirect = user32.NewProc("UpdateLayeredWindowIndirect")
+	procSetTimer                    = user32.NewProc("SetTimer")
+	procKillTimer                   = user32.NewProc("KillTimer")
+	procGetMessageW                 = user32.NewProc("GetMessageW")
+	procTranslateMessage            = user32.NewProc("TranslateMessage")
+	procDispatchMessageW            = user32.NewProc("DispatchMessageW")
+	procPostMessageW                = user32.NewProc("PostMessageW")
+	procPostQuitMessage             = user32.NewProc("PostQuitMessage")
+	procSetWindowPos                = user32.NewProc("SetWindowPos")
+	procEnumDisplayMonitors         = user32.NewProc("EnumDisplayMonitors")
+	procGetMonitorInfoW             = user32.NewProc("GetMonitorInfoW")
+	procGetDC                       = user32.NewProc("GetDC")
+	procReleaseDC                   = user32.NewProc("ReleaseDC")
+
+	procGetDpiForMonitor = shcore.NewProc("GetDpiForMonitor")
 
 	procCreateCompatibleDC = gdi32.NewProc("CreateCompatibleDC")
 	procCreateDIBSection   = gdi32.NewProc("CreateDIBSection")
@@ -55,6 +59,8 @@ const (
 	swpNoMove     = 0x0002
 	swpNoActivate = 0x0010
 
+	// ulwAlpha is ULW_ALPHA: the bitmap's own alpha channel is the shape of
+	// the window, and SourceConstantAlpha fades the whole window.
 	ulwAlpha = 0x00000002
 
 	biRGB = 0
@@ -64,6 +70,10 @@ const (
 	wmDestroy   = 0x0002
 	wmNcHitTest = 0x0084
 	wmTimer     = 0x0113
+	// wmDisplayChange is sent to every top-level window when the display
+	// configuration changes: a resolution, a scale, or a monitor added or
+	// removed.
+	wmDisplayChange = 0x007e
 
 	messageCue  = 0x8001 // WM_APP + 1
 	messageQuit = 0x8002 // WM_APP + 2
@@ -72,6 +82,7 @@ const (
 	timerID = 1
 
 	monitorInfoPrimary = 0x00000001
+	mdtEffectiveDPI    = 0
 )
 
 type rect struct {
@@ -117,6 +128,14 @@ type monitorInfo struct {
 	Flags   uint32
 }
 
+// monitor is one display as the overlay needs it: where it is, and how much
+// its scale enlarges the glow's width.
+type monitor struct {
+	handle uintptr
+	bounds rect
+	dpi    uint32
+}
+
 type bitmapInfoHeader struct {
 	Size          uint32
 	Width         int32
@@ -141,23 +160,43 @@ type blendFunction struct {
 const acSrcOver = 0
 const acSrcAlpha = 1
 
-// primaryMonitor returns the bounds of the primary display in physical
-// pixels, which is what a layered window's bitmap has to match.
-func primaryMonitor() (rect, bool) {
-	var found rect
-	var ok bool
+// updateLayeredWindowInfo is UPDATELAYEREDWINDOWINFO. Its dirty rectangle is
+// what makes an animation cheap: a frame changes only the constant alpha, so
+// one pixel is re-uploaded and the compositor blends the whole band.
+type updateLayeredWindowInfo struct {
+	Size    uint32
+	DstDC   uintptr
+	Dst     *point
+	WndSize *size
+	SrcDC   uintptr
+	Src     *point
+	Key     uint32
+	Blend   *blendFunction
+	Flags   uint32
+	Dirty   *rect
+}
+
+// monitors returns every display's bounds in physical pixels, which is what a
+// layered window's bitmap has to match. The process is per-monitor DPI aware,
+// so these are real pixels rather than the scaled coordinates a DPI-unaware
+// process would see. Each display's effective DPI decides the glow's width.
+func monitors() []monitor {
+	var found []monitor
 	cb := syscall.NewCallback(func(hMonitor, _ /*hdc*/, _ /*rect*/, _ uintptr) uintptr {
 		mi := monitorInfo{Size: uint32(unsafe.Sizeof(monitorInfo{}))}
 		if r, _, _ := procGetMonitorInfoW.Call(hMonitor, uintptr(unsafe.Pointer(&mi))); r == 0 {
 			return 1
 		}
-		if mi.Flags&monitorInfoPrimary != 0 {
-			found, ok = mi.Monitor, true
+		dpi := uint32(96)
+		var x, y uint32
+		if hr, _, _ := procGetDpiForMonitor.Call(hMonitor, mdtEffectiveDPI, uintptr(unsafe.Pointer(&x)), uintptr(unsafe.Pointer(&y))); hr == 0 && x != 0 {
+			dpi = x
 		}
+		found = append(found, monitor{handle: hMonitor, bounds: mi.Monitor, dpi: dpi})
 		return 1
 	})
 	procEnumDisplayMonitors.Call(0, 0, cb, 0)
-	return found, ok
+	return found
 }
 
 func utf16(s string) *uint16 {

@@ -78,12 +78,18 @@ func TestCueStartRecordsTheSource(t *testing.T) {
 }
 
 func TestSourceColoursDiffer(t *testing.T) {
-	codex, opencode := sourceColour(events.Codex), sourceColour(events.OpenCode)
-	if codex == opencode {
-		t.Fatalf("both sources cue in %v", codex)
+	codex, opencode := sourceCue(events.Codex), sourceCue(events.OpenCode)
+	if codex.Primary == opencode.Primary {
+		t.Fatalf("both sources cue in %v", codex.Primary)
 	}
-	if got := sourceColour(""); got != codex {
-		t.Fatalf("a bare wake cues in %v, want the product colour %v", got, codex)
+	if codex.Secondary == opencode.Secondary {
+		t.Fatalf("both sources flash the same second colour %v", codex.Secondary)
+	}
+	if !codex.Animation.Valid() || !opencode.Animation.Valid() {
+		t.Fatalf("animations %v and %v", codex.Animation, opencode.Animation)
+	}
+	if got := sourceCue(""); got != codex {
+		t.Fatalf("a bare wake cues %+v, want the product cue %+v", got, codex)
 	}
 }
 

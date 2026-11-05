@@ -237,7 +237,7 @@ func (a *App) cueStart(source events.Source) {
 	a.state.lastCue = time.Now()
 	a.state.lastSource = source
 	if a.overlay != nil {
-		a.overlay.Show(sourceColour(source))
+		a.overlay.Show(sourceCue(source))
 	}
 	spoken := a.speechWanted(source)
 	if spoken {
@@ -483,13 +483,22 @@ func (a *App) invalidate() {
 	}
 }
 
-// sourceColour is each producer's colour: Codex is the product's own teal,
-// OpenCode a violet that stays legible on a light and a dark desktop.
-func sourceColour(source events.Source) color.NRGBA {
+// sourceCue is each producer's presentation: Codex is the product's own teal,
+// OpenCode a violet that stays legible on a light and a dark desktop. The
+// second colour is what the flash animation alternates with.
+func sourceCue(source events.Source) overlay.Cue {
 	if source == events.OpenCode {
-		return color.NRGBA{R: 167, G: 139, B: 250, A: 255}
+		return overlay.Cue{
+			Primary:   color.NRGBA{R: 167, G: 139, B: 250, A: 255},
+			Secondary: color.NRGBA{R: 244, G: 114, B: 182, A: 255},
+			Animation: overlay.Breathing,
+		}
 	}
-	return color.NRGBA{R: 94, G: 234, B: 212, A: 255}
+	return overlay.Cue{
+		Primary:   color.NRGBA{R: 94, G: 234, B: 212, A: 255},
+		Secondary: color.NRGBA{R: 96, G: 165, B: 250, A: 255},
+		Animation: overlay.Breathing,
+	}
 }
 
 // trayIcon draws the product: four glowing edges around an empty middle.

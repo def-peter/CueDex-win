@@ -2,8 +2,18 @@ package overlay
 
 import (
 	"image/color"
+	"math"
 	"testing"
+	"time"
 )
+
+// bandPixels renders one band into a fresh slice, the way the overlay fills its
+// bitmap.
+func bandPixels(w, h int, edge Edge, c color.NRGBA, thickness float64) []byte {
+	out := make([]byte, w*h*4)
+	fillBand(out, w, h, edge, c, thickness)
+	return out
+}
 
 func TestFalloffIsOpaqueAtTheEdgeAndClearInside(t *testing.T) {
 	if got := falloff(0, 64); got != 1 {
@@ -77,6 +87,86 @@ func TestBreatheIsSilentAtBothEnds(t *testing.T) {
 	}
 	if peak < 0.6 {
 		t.Fatalf("peak alpha %v is too faint", peak)
+	}
+}
+
+func TestBreathingFollowsTheKeyframes(t *testing.T) {
+	const duration = 3.0
+	for _, tc := range []struct {
+		fraction float64
+		want     float64
+	}{
+		{0.2, 1},
+		{0.48, 0.48},
+		{0.78, 1},
+	} {
+		if got := breathe(duration*tc.fraction, duration); math.Abs(got-tc.want) > 0.001 {
+			t.Errorf("breathe at %v = %v, want %v", tc.fraction, got, tc.want)
+		}
+	}
+}
+
+func TestFlashAlternatesTheTwoColours(t *testing.T) {
+	// At the peak of the first blink only the primary colour is lit; at the
+	// peak of the third blink only the secondary is. The envelope stays at
+	// full strength between them, so the flash never dips while it blinks.
+	for _, tc := range []struct {
+		name                         string
+		phase                        float64
+		envelope, primary, secondary float64
+	}{
+		// The envelope eases in over the first tenth, so the first blink
+		// happens while the glow is still coming up.
+		{"primary peak", 0.08, 0.896, 1, 0},
+		{"handover", 0.5, 1, 0, 0},
+		{"secondary peak", 0.58, 1, 0, 1},
+		{"last secondary peak", 0.74, 1, 0, 1},
+	} {
+		elapsed := time.Duration(tc.phase * float64(flashCyclePeriod))
+		envelope, primary, secondary := sample(AlternatingFlash, elapsed)
+		if math.Abs(envelope-tc.envelope) > 0.001 {
+			t.Errorf("%s: envelope %v, want %v", tc.name, envelope, tc.envelope)
+		}
+		if math.Abs(primary-tc.primary) > 0.001 || math.Abs(secondary-tc.secondary) > 0.001 {
+			t.Errorf("%s: colours %v/%v, want %v/%v", tc.name, primary, secondary, tc.primary, tc.secondary)
+		}
+	}
+}
+
+func TestFlashFadesInAndOut(t *testing.T) {
+	if got := sampleFrames(flashEnvelope, 0); got != 0 {
+		t.Fatalf("flash starts at %v", got)
+	}
+	if got := sampleFrames(flashEnvelope, 1); got != 0 {
+		t.Fatalf("flash ends at %v", got)
+	}
+	if got := sampleFrames(flashEnvelope, 0.5); got != 1 {
+		t.Fatalf("flash holds at %v", got)
+	}
+}
+
+func TestBreathingUsesOneColour(t *testing.T) {
+	envelope, primary, secondary := sample(Breathing, 600*time.Millisecond)
+	if primary != 1 || secondary != 0 {
+		t.Fatalf("breathing shares light as %v/%v", primary, secondary)
+	}
+	if envelope <= 0 || envelope > 1 {
+		t.Fatalf("envelope %v", envelope)
+	}
+}
+
+func TestThicknessGrowsWithTheDisplayScale(t *testing.T) {
+	if got := thicknessFor(96); got != bandThickness {
+		t.Fatalf("96 DPI gives %d, want %d", got, bandThickness)
+	}
+	if got := thicknessFor(144); got != bandThickness*3/2 {
+		t.Fatalf("150%% gives %d", got)
+	}
+	if got := thicknessFor(192); got != bandThickness*2 {
+		t.Fatalf("200%% gives %d", got)
+	}
+	if got := thicknessFor(0); got != bandThickness {
+		t.Fatalf("unknown DPI gives %d", got)
 	}
 }
 

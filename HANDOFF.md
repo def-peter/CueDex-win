@@ -183,6 +183,39 @@ mygo.WindowOptions{
   **0.3780**，证明中文短语真的从默认设备播出。
 - 没有 voice 时枚举返回空表；语音选项隐藏，提示音照旧，不弹对话框。
 
+### 6.3 覆盖层实测（`internal/overlay` + `cmd/overlayspike`，本机双屏）
+
+结论：**每屏四条边带 + 两种动画可用，CPU 与内存回到预算内。** 关键是把
+「每帧重传整条边带」换成「每帧只改窗口的全局 alpha」。
+
+| 项 | 结果 |
+| --- | --- |
+| 几何 | 2560x1600@150% 与 1920x1080@100% 两块屏各四条边，转角无缝，负坐标屏正确 |
+| 带宽 | 96 DPI = 64 px，150% = 96 px（`GetDpiForMonitor` 取 effective DPI） |
+| 动画 CPU（30 fps） | breathing 中位数 1.6%，flash 中位数 2.3%（单核） |
+| 常驻 / 提示峰值 RSS | 20–29 MB / 29.8 MB |
+| 动画结束残留 | 0–3 个像素（`Hide()` 之后截图对比） |
+| 首帧 | 窗口在启动时就建好，`Show` → 首帧 < 1 帧（33 ms） |
+
+实现事实，都是踩过的坑：
+
+- 每帧 `UpdateLayeredWindow` 整面上传是 CPU 主因（实测 60 fps 时 19.8% 单核）。
+  改用 `UpdateLayeredWindowIndirect` + 1×1 脏区只改 `SourceConstantAlpha`，
+  单窗口一次约 0.1 ms，成本降到与刷新率成正比。
+- 帧率最终定在 30 fps（`frameInterval = 33`）。60 fps 在这台机器上大约是两倍
+  CPU，肉眼没有区别；测量本身受后台程序影响，同一配置连测能差一倍，
+  所以只认多次采样的中位数。
+- `SetLayeredWindowAttributes` 与 `UpdateLayeredWindow` 混用会把窗口变全透明，
+  不能用它改 alpha。
+- 两色 flash 不要用「一张位图上下叠两色 + 改 `pptSrc.Y` 切换」：带 1×1 脏区时
+  只有那一个像素换了源，整条边带的颜色不变。可行做法是每条边两套窗口，
+  各持一种颜色，切换只改 alpha。
+- 带 `ppSrc` 不传位图也是允许的：窗口自己保存像素，`hdcSrc = NULL` 只改
+  alpha 就行。因此位图只在提示开始时创建、上传后立即释放，峰值内存比常驻
+  位图少约 4 MB。
+- `WM_DISPLAYCHANGE` 触发重建；播放中的提示会用新几何重开，`Show` 期间一律
+  先比较显示器签名，几何没变就不重建。
+
 ## 7. 待验证的未知（不要用 mac 经验假设）
 
 1. **Codex 在 Windows 上如何执行 `hooks.json` 的 command** —— cmd、PowerShell
