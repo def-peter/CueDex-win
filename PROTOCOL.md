@@ -5,6 +5,10 @@ separate projects. They share no code. This file is the only shared contract:
 each app's integration helper must produce events that the other side's rules
 also describe, so the two implementations stay behaviourally identical.
 
+Behaviour parity only. Paths, file names and wake mechanisms follow each
+platform's conventions; the macOS rows below are reference, not something this
+app must mirror.
+
 Prompt and response content is never written. Every field below is metadata.
 
 ## Event directory
