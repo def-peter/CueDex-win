@@ -1,59 +1,71 @@
 package main
 
 import (
-	"fmt"
 	"log"
+	"os"
 
 	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/ui"
+
+	"github.com/def-peter/cuedex-win/internal/app"
+	"github.com/def-peter/cuedex-win/internal/paths"
 )
 
-// app is the state the window shows. Its view builds the interface from
-// it, on the main thread, whenever the window needs a frame: after input,
-// after Window.Update, and while something animates.
-type app struct {
-	name  string
-	count int
-}
-
-func (a *app) view(c *ui.Context) {
-	t := c.Theme()
-	ui.Column(c).Fill().Center().Gap(16).Padding(24).Children(func() {
-		ui.Text(c, "CueDex").FontSize(26).Bold()
-		ui.TextInput(c, &a.name).Placeholder("Your name").Label("Name").Width(240)
-		greeting := "Hello!"
-		if a.name != "" {
-			greeting = fmt.Sprintf("Hello, %s!", a.name)
-		}
-		ui.Text(c, greeting).TextColor(t.TextMuted)
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "−").Width(44).Clicked() {
-				a.count--
-			}
-			ui.Textf(c, "%d", a.count).FontSize(20).Width(48).TextAlign(ui.Center)
-			if ui.PrimaryButton(c, "+").Width(44).Clicked() {
-				a.count++
-			}
-		})
-	})
-}
-
 func main() {
-	a := &app{}
+	opts := parseArgs(os.Args[1:])
+
+	mygo.App.SetName("CueDex")
+	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
+
+	// A second launch hands its arguments to the running instance and ends
+	// there, so only one tray icon and one event consumer ever exist.
+	if !mygo.App.RequestSingleInstanceLock() {
+		return
+	}
+
+	dir, err := paths.UserData()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := dir.Prepare(); err != nil {
+		log.Fatal(err)
+	}
+
+	a := app.New(dir)
+	mygo.App.OnSecondInstance(func(args []string, _ string) {
+		if parseArgs(args).cue {
+			a.Cue()
+		}
+	})
+
 	mygo.App.WhenReady(func() {
-		mygo.NewWindow(mygo.WindowOptions{
-			Title:     "CueDex",
-			Width:     480,
-			Height:    360,
-			MinWidth:  320,
-			MinHeight: 280,
-			// Opens where the user left it last time.
-			StateKey: "main",
-			// The window shows the interface MyGo draws, not a web page.
-			Content: ui.View(a.view),
-		})
+		a.Ready()
+		if opts.cue {
+			a.Cue()
+		}
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// options are the launch arguments the app understands.
+type options struct {
+	// cue asks the running app to show a cue now (PROTOCOL.md).
+	cue bool
+	// background is how the startup entry launches the app: tray only, no
+	// panel, nothing that looks like a launch.
+	background bool
+}
+
+func parseArgs(args []string) options {
+	var o options
+	for _, arg := range args {
+		switch arg {
+		case "--cue":
+			o.cue = true
+		case "--background":
+			o.background = true
+		}
+	}
+	return o
 }
