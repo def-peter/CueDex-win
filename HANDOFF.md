@@ -124,6 +124,41 @@ mygo.WindowOptions{
 （`WS_EX_LAYERED|TRANSPARENT|TOOLWINDOW|NOACTIVATE`），只画四条边带，
 预渲染渐变位图、每帧只改 alpha。成本约 300–400 行，已论证可行。
 
+### 6.1 spike 实测结果（`cmd/glowspike`，本机双屏 2560x1600@150% + 1920x1080@100%）
+
+结论：**纯 MyGo `ui` 窗口做常驻覆盖层不成立，改走上面的 Win32 分层窗口退路。**
+触发条件不是验收 1/3，而是 4/5/6：内存与首帧延迟。
+
+功能侧全部达标，可继续按此写：
+
+- 每块显示屏一个 frameless + transparent + AlwaysOnTop + SkipTaskbar + Panel 窗口，
+  `SetIgnoreMouseEvents(true)` 之后点击/滚轮/悬停全部穿透（`WS_EX_TRANSPARENT`）。
+- 边缘辉光用 `BorderConicGradient` + `Border(w, ui.Color{})` + `Blur` 出渐层与柔边，
+  视觉正确，`p.Accelerated()` 为 true（GPU 路径），动画期 CPU ≈ 1% 单核。
+- 窗口预热后「触发→首帧」= 0–1 ms，远超 100 ms 预算。
+
+内存/延迟不合格（同一份进程，PowerShell 每 400–500 ms 采样稳定值）：
+
+| 形态 | 常驻 RSS | 说明 |
+| --- | --- | --- |
+| 无窗口（仅 app 事件循环） | 13 MB | 托盘程序的合理基线 |
+| 2 个全屏透明 `ui` 窗口 | 101 MB | 验收 4 要求 ≤ 25 MB |
+| 8 个窄条 `ui` 窗口 | 213 MB | 每个窗口约 25–44 MB，与面积无关 |
+
+另外两条：3 s 动画期 RSS 峰值 300–320 MB（`Blur` 的全屏离屏纹理，GC 前不归还），
+`Window.Hide()` 不释放这些资源；隐藏后再 `ShowInactive` 首帧变成 **267–351 ms**，
+超过 100 ms 预算。也就是说「空闲隐藏、提示时显示」也是死路。
+
+由此得出必须照做的两个实现事实：
+
+- **`WindowOptions.DisableMove` 会毁掉初始定位**：MyGo 在 `WM_WINDOWPOSCHANGING`
+  里对不可移动窗口强制 `SWP_NOMOVE`，连首次 `SetWindowPos` 一起吃掉，窗口留在 0,0。
+  覆盖层不要设 `DisableMove`（穿透窗口本来就拖不动）。
+- **MyGo 的 `X/Y/Width/Height` 在非主屏、不同缩放时不可靠**：本机 1920x1080@100%
+  那块屏请求 1920x1080 得到 1280x720。覆盖层几何一律用裸 Win32
+  `EnumDisplayMonitors` + `SetWindowPos`（物理像素）设置，实测与真值一致。
+- 透明要显式 `c.Root().Background(ui.Transparent)`，否则根节点会刷主题背景（白底）。
+
 ## 7. 待验证的未知（不要用 mac 经验假设）
 
 1. **Codex 在 Windows 上如何执行 `hooks.json` 的 command** —— cmd、PowerShell
