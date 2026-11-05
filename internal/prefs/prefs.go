@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/def-peter/cuedex-win/internal/events"
 	"github.com/def-peter/cuedex-win/internal/sound"
@@ -18,7 +19,8 @@ import (
 // Preferences is the whole file. Fields are added, not renamed, so a file
 // written by an older build keeps working.
 type Preferences struct {
-	Sound SoundPreferences `json:"sound"`
+	Sound  SoundPreferences  `json:"sound"`
+	Speech SpeechPreferences `json:"speech"`
 }
 
 // SoundPreferences is the cue sound per producer. Each producer has its own, so
@@ -35,6 +37,27 @@ type SoundChoice struct {
 	Volume int    `json:"volume"`
 }
 
+// SpeechPreferences is the spoken announcement. The text is not stored: it is
+// a constant per producer, so no file can make the app read a reply aloud.
+type SpeechPreferences struct {
+	// Voice is the SAPI token id; empty means the system default.
+	Voice string `json:"voice"`
+	// Codex and OpenCode say whether that producer is announced.
+	Codex    bool `json:"codex"`
+	OpenCode bool `json:"opencode"`
+	// ReplaceSound silences the cue sound when a phrase is spoken. Speech is
+	// additive by default, so a voice that fails never leaves a cue silent.
+	ReplaceSound bool `json:"replaceSound"`
+}
+
+// On reports whether a producer is announced.
+func (s SpeechPreferences) On(source events.Source) bool {
+	if source == events.OpenCode {
+		return s.OpenCode
+	}
+	return s.Codex
+}
+
 // Default is what a fresh install cues: a rising chime for Codex, a falling one
 // for OpenCode, both at a volume that is audible without being startling.
 func Default() Preferences {
@@ -43,6 +66,7 @@ func Default() Preferences {
 			Codex:    SoundChoice{ID: "rise", Volume: 70},
 			OpenCode: SoundChoice{ID: "fall", Volume: 70},
 		},
+		Speech: SpeechPreferences{Voice: "", Codex: false, OpenCode: false},
 	}
 }
 
@@ -65,6 +89,12 @@ func (p Preferences) Set(source events.Source, choice SoundChoice) Preferences {
 	return p.Normalized()
 }
 
+// SetSpeech replaces the speech preferences and returns the result.
+func (p Preferences) SetSpeech(s SpeechPreferences) Preferences {
+	p.Speech = s
+	return p.Normalized()
+}
+
 // Normalized fills in what a file left out and repairs what a file got wrong.
 // A clue that no longer exists falls back to the default sound rather than
 // leaving the producer silent; a volume outside 0-100 is clamped.
@@ -72,6 +102,7 @@ func (p Preferences) Normalized() Preferences {
 	defaults := Default()
 	p.Sound.Codex = normalizeChoice(p.Sound.Codex, defaults.Sound.Codex)
 	p.Sound.OpenCode = normalizeChoice(p.Sound.OpenCode, defaults.Sound.OpenCode)
+	p.Speech.Voice = strings.TrimSpace(p.Speech.Voice)
 	return p
 }
 

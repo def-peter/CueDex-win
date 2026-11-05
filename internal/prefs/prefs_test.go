@@ -121,3 +121,41 @@ func TestLoadKeepsAKnownChoice(t *testing.T) {
 		t.Fatalf("opencode: %+v", p.Sound.OpenCode)
 	}
 }
+
+func TestSpeechIsOffByDefault(t *testing.T) {
+	p := Default()
+	if p.Speech.On(events.Codex) || p.Speech.On(events.OpenCode) {
+		t.Fatalf("speech is on by default: %+v", p.Speech)
+	}
+	if p.Speech.ReplaceSound {
+		t.Fatal("speech replaces the sound by default")
+	}
+}
+
+func TestSetSpeechKeepsTheOtherProducerMapping(t *testing.T) {
+	p := Default().SetSpeech(SpeechPreferences{Voice: "  voice-id  ", OpenCode: true})
+	if p.Speech.Voice != "voice-id" {
+		t.Fatalf("voice %q was not trimmed", p.Speech.Voice)
+	}
+	if !p.Speech.On(events.OpenCode) || p.Speech.On(events.Codex) {
+		t.Fatalf("toggles %+v", p.Speech)
+	}
+	if p.Speech.ReplaceSound {
+		t.Fatal("replace was turned on unexpectedly")
+	}
+}
+
+func TestSpeechChoicesSurviveASave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "preferences.json")
+	want := Default().SetSpeech(SpeechPreferences{Voice: "voice-a", Codex: true, ReplaceSound: true})
+	if err := Save(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("loaded %+v, want %+v", got, want)
+	}
+}

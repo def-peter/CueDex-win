@@ -10,6 +10,7 @@ import (
 	"github.com/def-peter/cuedex-win/internal/events"
 	"github.com/def-peter/cuedex-win/internal/prefs"
 	"github.com/def-peter/cuedex-win/internal/sound"
+	"github.com/def-peter/cuedex-win/internal/speech"
 )
 
 // settings is the state the panel shows and the two actions it offers. It has
@@ -34,6 +35,15 @@ type settings struct {
 	opencodeSound soundSettings
 	soundProblem  string
 
+	speechVoices     []speech.Voice
+	speechLoaded     bool
+	speechProblem    string
+	speechCodex      bool
+	speechOpenCode   bool
+	speechReplace    bool
+	speechVoiceID    string
+	speechVoiceLabel string
+
 	onTogglePause func()
 	onClose       func()
 	onToggleCodex func()
@@ -41,6 +51,7 @@ type settings struct {
 	onToggleOpenCode func()
 	onChangeSound    func(events.Source)
 	onPreviewSound   func(events.Source)
+	onChangeSpeech   func()
 }
 
 // soundSettings is one producer's controls: which bundled sound, and how loud.
@@ -94,6 +105,79 @@ func soundIndex(id string) int {
 	return 0
 }
 
+// applySpeech fills the speech controls from the saved choices.
+func (s *settings) applySpeech(p prefs.Preferences) {
+	s.speechCodex = p.Speech.Codex
+	s.speechOpenCode = p.Speech.OpenCode
+	s.speechReplace = p.Speech.ReplaceSound
+	s.speechVoiceID = p.Speech.Voice
+	s.speechVoiceLabel = s.labelForVoiceID(p.Speech.Voice)
+}
+
+// setVoices records what SAPI reports and points the picker at the voice that
+// is actually installed. A voice saved by another machine is not offered, and
+// the next save drops it.
+func (s *settings) setVoices(voices []speech.Voice) {
+	s.speechVoices = voices
+	s.speechLoaded = true
+	if _, ok := s.voiceForID(s.speechVoiceID); !ok {
+		s.speechVoiceID = ""
+	}
+	s.speechVoiceLabel = s.labelForVoiceID(s.speechVoiceID)
+}
+
+func (s *settings) voiceForID(id string) (speech.Voice, bool) {
+	for _, v := range s.speechVoices {
+		if v.ID == id {
+			return v, true
+		}
+	}
+	return speech.Voice{}, false
+}
+
+func (s *settings) labelForVoiceID(id string) string {
+	if id == "" {
+		return "系统默认"
+	}
+	if v, ok := s.voiceForID(id); ok {
+		return v.Label()
+	}
+	return "系统默认"
+}
+
+// voiceOptions is the picker's list. The first choice is always the default.
+func (s *settings) voiceOptions() []string {
+	options := make([]string, 0, len(s.speechVoices)+1)
+	options = append(options, "系统默认")
+	for _, v := range s.speechVoices {
+		options = append(options, v.Label())
+	}
+	return options
+}
+
+// selectedVoiceID maps the picker's label back to the token id.
+func (s *settings) selectedVoiceID() string {
+	if s.speechVoiceLabel == "" || s.speechVoiceLabel == "系统默认" {
+		return ""
+	}
+	for _, v := range s.speechVoices {
+		if v.Label() == s.speechVoiceLabel {
+			return v.ID
+		}
+	}
+	return ""
+}
+
+// speech is what the panel currently says about the announcement.
+func (s *settings) speech() prefs.SpeechPreferences {
+	return prefs.SpeechPreferences{
+		Voice:        s.selectedVoiceID(),
+		Codex:        s.speechCodex,
+		OpenCode:     s.speechOpenCode,
+		ReplaceSound: s.speechReplace,
+	}
+}
+
 func (s *settings) view(c *ui.Context) {
 	t := c.Theme()
 	c.OnShortcut(ui.Cmd, ui.KeyW, func() {
@@ -124,6 +208,41 @@ func (s *settings) view(c *ui.Context) {
 		s.soundControls(c, events.OpenCode, "OpenCode", &s.opencodeSound)
 		if s.soundProblem != "" {
 			ui.Text(c, s.soundProblem).FontSize(12).TextColor(t.TextMuted)
+		}
+		if s.speechLoaded && len(s.speechVoices) > 0 {
+			ui.Spacer(c)
+			ui.Text(c, "语音播报").FontSize(14).Bold()
+			ui.Text(c, "只说固定短语（Codex 已完成 / OpenCode 已完成），不朗读任何回复内容").FontSize(12).TextColor(t.TextMuted)
+			ui.Row(c).Gap(16).Children(func() {
+				ui.Checkbox(c, &s.speechCodex, "朗读 Codex").OnChange(func() {
+					if s.onChangeSpeech != nil {
+						s.onChangeSpeech()
+					}
+				})
+				ui.Checkbox(c, &s.speechOpenCode, "朗读 OpenCode").OnChange(func() {
+					if s.onChangeSpeech != nil {
+						s.onChangeSpeech()
+					}
+				})
+				ui.Spacer(c)
+			})
+			ui.Row(c).Gap(8).Children(func() {
+				ui.Text(c, "声音").FontSize(12).Width(64)
+				ui.Select(c, &s.speechVoiceLabel, s.voiceOptions()).Grow(1).OnChange(func() {
+					if s.onChangeSpeech != nil {
+						s.onChangeSpeech()
+					}
+				})
+			})
+			ui.Checkbox(c, &s.speechReplace, "用语音替代提示音").OnChange(func() {
+				if s.onChangeSpeech != nil {
+					s.onChangeSpeech()
+				}
+			})
+			ui.Text(c, "没有可用语音时自动回到提示音").FontSize(12).TextColor(t.TextMuted)
+			if s.speechProblem != "" {
+				ui.Text(c, s.speechProblem).FontSize(12).TextColor(t.TextMuted)
+			}
 		}
 		ui.Spacer(c)
 		ui.Text(c, "Codex 集成").FontSize(14).Bold()

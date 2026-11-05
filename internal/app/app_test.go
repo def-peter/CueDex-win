@@ -14,6 +14,7 @@ import (
 	"github.com/def-peter/cuedex-win/internal/playback"
 	"github.com/def-peter/cuedex-win/internal/prefs"
 	"github.com/def-peter/cuedex-win/internal/sound"
+	"github.com/def-peter/cuedex-win/internal/speech"
 )
 
 func TestPauseReachesThePlayer(t *testing.T) {
@@ -261,6 +262,177 @@ func TestSoundChoiceFollowsThePanelIndex(t *testing.T) {
 	s.codexSound.volume = 42.6
 	if got := s.choice(events.Codex); got.ID != all[0].ID || got.Volume != 43 {
 		t.Fatalf("out-of-range choice %+v", got)
+	}
+}
+
+// fakeSpeaker records what the app asked to say.
+type fakeSpeaker struct {
+	voices   []speech.Voice
+	voiceErr error
+	speakErr error
+	said     []string
+	voiceIDs []string
+	stops    int
+	closed   bool
+}
+
+func (f *fakeSpeaker) Voices() ([]speech.Voice, error) { return f.voices, f.voiceErr }
+
+func (f *fakeSpeaker) Speak(voiceID, text string) error {
+	f.voiceIDs = append(f.voiceIDs, voiceID)
+	f.said = append(f.said, text)
+	return f.speakErr
+}
+
+func (f *fakeSpeaker) Stop()  { f.stops++ }
+func (f *fakeSpeaker) Close() { f.closed = true }
+
+func TestCueSpeaksTheFixedPhrase(t *testing.T) {
+	speaker := &fakeSpeaker{voices: []speech.Voice{{ID: "voice", Name: "Voice", Language: "zh-CN"}}}
+	audio := &fakeAudio{}
+	a := &App{audio: audio, speech: speaker, prefs: prefs.Default(), voicesLoaded: true, voices: speaker.voices}
+	a.prefs = a.prefs.SetSpeech(prefs.SpeechPreferences{Voice: "voice", Codex: true})
+	a.cueStart(events.Codex)
+
+	if len(speaker.said) != 1 || speaker.said[0] != "Codex 已完成" {
+		t.Fatalf("said %v", speaker.said)
+	}
+	if speaker.voiceIDs[0] != "voice" {
+		t.Fatalf("voice %q", speaker.voiceIDs[0])
+	}
+	// Speech is additive by default.
+	if len(audio.plays) != 1 {
+		t.Fatalf("plays %v, want the sound too", audio.plays)
+	}
+}
+
+func TestSpeechReplacesTheSoundOnlyWhenAsked(t *testing.T) {
+	speaker := &fakeSpeaker{voices: []speech.Voice{{ID: "voice", Name: "Voice"}}}
+	audio := &fakeAudio{}
+	a := &App{audio: audio, speech: speaker, prefs: prefs.Default(), voicesLoaded: true, voices: speaker.voices}
+	a.prefs = a.prefs.SetSpeech(prefs.SpeechPreferences{Codex: true, ReplaceSound: true})
+	a.cueStart(events.Codex)
+	if len(speaker.said) != 1 || len(audio.plays) != 0 {
+		t.Fatalf("said %v plays %v, want speech instead of sound", speaker.said, audio.plays)
+	}
+}
+
+func TestNoVoicesFallsBackToTheSound(t *testing.T) {
+	// The preference was saved on a machine with voices; this one has none.
+	speaker := &fakeSpeaker{}
+	audio := &fakeAudio{}
+	a := &App{audio: audio, speech: speaker, prefs: prefs.Default(), voicesLoaded: true}
+	a.prefs = a.prefs.SetSpeech(prefs.SpeechPreferences{Codex: true, ReplaceSound: true})
+	a.cueStart(events.Codex)
+	if len(speaker.said) != 0 {
+		t.Fatalf("said %v without a voice", speaker.said)
+	}
+	if len(audio.plays) != 1 {
+		t.Fatalf("plays %v, want the chime back", audio.plays)
+	}
+}
+
+func TestSpeechIsOffByDefault(t *testing.T) {
+	speaker := &fakeSpeaker{voices: []speech.Voice{{ID: "voice"}}}
+	a := &App{audio: &fakeAudio{}, speech: speaker, prefs: prefs.Default(), voicesLoaded: true, voices: speaker.voices}
+	a.cueStart(events.Codex)
+	if len(speaker.said) != 0 {
+		t.Fatalf("said %v with speech off", speaker.said)
+	}
+}
+
+func TestSpeechFailureDoesNotStopTheCue(t *testing.T) {
+	speaker := &fakeSpeaker{speakErr: errors.New("no output")}
+	a := &App{audio: &fakeAudio{}, speech: speaker, prefs: prefs.Default()}
+	a.prefs = a.prefs.SetSpeech(prefs.SpeechPreferences{Codex: true})
+	a.cueStart(events.Codex)
+	if a.state.cueCount != 1 {
+		t.Fatalf("count %d, want the cue counted", a.state.cueCount)
+	}
+	if !strings.Contains(a.state.speechProblem, "no output") {
+		t.Fatalf("problem %q", a.state.speechProblem)
+	}
+}
+
+func TestCueStopSilencesTheSpeech(t *testing.T) {
+	speaker := &fakeSpeaker{}
+	a := &App{speech: speaker}
+	a.cueStop()
+	if speaker.stops != 1 {
+		t.Fatalf("stops %d", speaker.stops)
+	}
+}
+
+func TestVoiceChoiceMapsLabelsToTokens(t *testing.T) {
+	s := settings{}
+	huihui := speech.Voice{ID: "id-zh", Name: "Huihui", Language: "zh-CN"}
+	zira := speech.Voice{ID: "id-en", Name: "Zira", Language: "en-US"}
+	s.setVoices([]speech.Voice{huihui, zira})
+	s.applySpeech(prefs.Default().SetSpeech(prefs.SpeechPreferences{Voice: "id-en", Codex: true}))
+	if s.speechVoiceLabel != zira.Label() {
+		t.Fatalf("label %q, want %q", s.speechVoiceLabel, zira.Label())
+	}
+	if got := s.selectedVoiceID(); got != "id-en" {
+		t.Fatalf("selected %q", got)
+	}
+	s.speechVoiceLabel = huihui.Label()
+	if got := s.selectedVoiceID(); got != "id-zh" {
+		t.Fatalf("selected %q", got)
+	}
+	s.speechVoiceLabel = "系统默认"
+	if got := s.selectedVoiceID(); got != "" {
+		t.Fatalf("default selected %q", got)
+	}
+}
+
+func TestVoiceThatIsNotInstalledFallsBack(t *testing.T) {
+	s := settings{}
+	s.setVoices([]speech.Voice{{ID: "id-zh", Name: "Huihui", Language: "zh-CN"}})
+	s.applySpeech(prefs.Default().SetSpeech(prefs.SpeechPreferences{Voice: "id-from-another-machine", Codex: true}))
+	if s.speechVoiceLabel != "系统默认" || s.selectedVoiceID() != "" {
+		t.Fatalf("label %q id %q, want the default", s.speechVoiceLabel, s.selectedVoiceID())
+	}
+	if !s.speechCodex {
+		t.Fatal("the toggle was lost with the voice")
+	}
+}
+
+func TestSpeechSectionAppearsWithVoices(t *testing.T) {
+	s := settings{}
+	s.setVoices([]speech.Voice{{ID: "id-zh", Name: "Huihui", Language: "zh-CN"}})
+	s.applySpeech(prefs.Default())
+	changed := 0
+	s.onChangeSpeech = func() { changed++ }
+	tt := ui.NewTester(s.view, 420, 790)
+
+	if !tt.HasText("语音播报") || !tt.HasText("不朗读任何回复内容") {
+		t.Fatalf("texts %q", tt.Texts())
+	}
+	options := s.voiceOptions()
+	if len(options) != 2 || options[0] != "系统默认" || options[1] != "Huihui（zh-CN）" {
+		t.Errorf("voice options %v", options)
+	}
+	if !tt.HasText("系统默认") {
+		t.Errorf("the picker does not show the default: %q", tt.Texts())
+	}
+	if err := tt.Click("朗读 Codex"); err != nil {
+		t.Fatal(err)
+	}
+	if !s.speechCodex || changed != 1 {
+		t.Fatalf("toggle %v changes %d", s.speechCodex, changed)
+	}
+}
+
+func TestSpeechSectionIsHiddenWithoutVoices(t *testing.T) {
+	s := settings{}
+	s.setVoices(nil)
+	s.applySpeech(prefs.Default())
+	tt := ui.NewTester(s.view, 420, 790)
+	if tt.HasText("语音播报") {
+		t.Fatalf("speech is offered without a voice: %q", tt.Texts())
+	}
+	if !tt.HasText("提示音") {
+		t.Fatal("the sound section disappeared too")
 	}
 }
 

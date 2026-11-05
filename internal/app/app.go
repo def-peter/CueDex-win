@@ -22,6 +22,7 @@ import (
 	"github.com/def-peter/cuedex-win/internal/playback"
 	"github.com/def-peter/cuedex-win/internal/prefs"
 	"github.com/def-peter/cuedex-win/internal/sound"
+	"github.com/def-peter/cuedex-win/internal/speech"
 )
 
 // audio is the part of the sound player the app uses, so a test can hear what
@@ -29,6 +30,15 @@ import (
 type audio interface {
 	Play(id string, volume int) error
 	Stop()
+}
+
+// speaker is the part of the speech engine the app uses, so a test can hear
+// what would have been said without a voice.
+type speaker interface {
+	Voices() ([]speech.Voice, error)
+	Speak(voiceID, text string) error
+	Stop()
+	Close()
 }
 
 // App owns the tray icon, the settings panel, and everything the panels show.
@@ -41,6 +51,7 @@ type App struct {
 	watch    *events.Watcher
 	player   *playback.Player
 	audio    audio
+	speech   speaker
 	codex    integrations.CodexIntegration
 	opencode integrations.OpenCodeIntegration
 	prefs    prefs.Preferences
@@ -48,7 +59,12 @@ type App struct {
 	prefsPath string
 	// saveTimer debounces the save while a slider is being dragged.
 	saveTimer *time.Timer
-	state     settings
+	// voices are the installed SAPI voices. They are read once in the
+	// background; until then the panel hides the speech section.
+	voices        []speech.Voice
+	voicesLoaded  bool
+	loadingVoices bool
+	state         settings
 }
 
 // New returns an app that keeps its files in dir and installs hooks that run
@@ -76,10 +92,12 @@ func New(dir paths.Dir, exe string) *App {
 			Exe:       exe,
 		},
 		audio:     &sound.Player{},
+		speech:    speech.New(),
 		prefs:     stored,
 		prefsPath: dir.Preferences(),
 	}
 	a.state.applySound(stored)
+	a.state.applySpeech(stored)
 	// The player decides when a cue runs; the drawing and the counters are the
 	// main thread's, so its callbacks marshal there.
 	a.player = playback.New(
@@ -92,6 +110,7 @@ func New(dir paths.Dir, exe string) *App {
 	a.state.onToggleOpenCode = a.toggleOpenCode
 	a.state.onChangeSound = a.changeSound
 	a.state.onPreviewSound = a.previewSound
+	a.state.onChangeSpeech = a.changeSpeech
 	return a
 }
 
@@ -138,6 +157,7 @@ func (a *App) Ready() {
 	}
 	a.refreshCodex()
 	a.refreshOpenCode()
+	a.loadVoices()
 
 	// Asking OpenCode for its version starts a process, so it happens off the
 	// main thread; the answer arrives before the user can press the button in
@@ -163,6 +183,7 @@ func (a *App) Ready() {
 			a.overlay.Close()
 		}
 		a.audio.Stop()
+		a.speech.Close()
 		if a.saveTimer != nil {
 			a.saveTimer.Stop()
 			a.saveTimer = nil
@@ -181,7 +202,7 @@ func (a *App) newWindow() *mygo.Window {
 	w := mygo.NewWindow(mygo.WindowOptions{
 		Title:             "CueDex",
 		Width:             420,
-		Height:            660,
+		Height:            790,
 		Frameless:         true,
 		DisableResize:     true,
 		DisableMinimize:   true,
@@ -218,15 +239,42 @@ func (a *App) cueStart(source events.Source) {
 	if a.overlay != nil {
 		a.overlay.Show(sourceColour(source))
 	}
-	choice := a.prefs.For(source)
-	if a.audio != nil {
-		if err := a.audio.Play(choice.ID, choice.Volume); err != nil {
-			log.Printf("cuedex: %v", err)
-			a.state.soundProblem = "提示音播放失败：" + err.Error()
+	spoken := a.speechWanted(source)
+	if spoken {
+		if err := a.speech.Speak(a.prefs.Speech.Voice, speech.Phrase(source)); err != nil {
+			log.Printf("cuedex: speech: %v", err)
+			a.state.speechProblem = "语音播报失败：" + err.Error()
 		}
+	}
+	// Speech replaces the sound only when the user asked for that and a voice
+	// is actually installed; a machine without voices always keeps the chime.
+	if !spoken || !a.prefs.Speech.ReplaceSound {
+		a.playSound(source)
 	}
 	if a.win != nil {
 		a.win.Invalidate()
+	}
+}
+
+// speechWanted says whether this completion should be announced. A machine
+// with no installed voice never tries, so a half-configured preference cannot
+// leave a cue silent.
+func (a *App) speechWanted(source events.Source) bool {
+	if a.speech == nil || !a.prefs.Speech.On(source) {
+		return false
+	}
+	return !a.voicesLoaded || len(a.voices) > 0
+}
+
+// playSound plays the producer's bundled cue sound.
+func (a *App) playSound(source events.Source) {
+	choice := a.prefs.For(source)
+	if a.audio == nil {
+		return
+	}
+	if err := a.audio.Play(choice.ID, choice.Volume); err != nil {
+		log.Printf("cuedex: %v", err)
+		a.state.soundProblem = "提示音播放失败：" + err.Error()
 	}
 }
 
@@ -238,12 +286,27 @@ func (a *App) cueStop() {
 	if a.audio != nil {
 		a.audio.Stop()
 	}
+	if a.speech != nil {
+		a.speech.Stop()
+	}
 }
 
 // changeSound stores the choice the panel just made. The next cue uses it; the
 // file is written a moment later, so dragging a slider is one save.
 func (a *App) changeSound(source events.Source) {
 	a.prefs = a.prefs.Set(source, a.state.choice(source))
+	a.scheduleSave()
+}
+
+// changeSpeech stores what the panel currently says about the announcement.
+func (a *App) changeSpeech() {
+	a.prefs = a.prefs.SetSpeech(a.state.speech())
+	a.scheduleSave()
+}
+
+// scheduleSave writes the preferences once the user stops moving things. A
+// slider drag and a row of toggles become one file write.
+func (a *App) scheduleSave() {
 	if a.saveTimer != nil {
 		a.saveTimer.Stop()
 	}
@@ -253,6 +316,30 @@ func (a *App) changeSound(source events.Source) {
 			a.savePrefs()
 		})
 	})
+}
+
+// loadVoices reads the installed SAPI voices in the background. The panel
+// hides the speech section until the answer arrives, and a machine with no
+// voices simply keeps it hidden.
+func (a *App) loadVoices() {
+	if a.speech == nil || a.voicesLoaded || a.loadingVoices {
+		return
+	}
+	a.loadingVoices = true
+	go func() {
+		voices, err := a.speech.Voices()
+		mygo.RunOnMain(func() {
+			a.loadingVoices = false
+			a.voicesLoaded = true
+			a.voices = voices
+			if err != nil {
+				log.Printf("cuedex: speech: %v", err)
+				a.state.speechProblem = "语音不可用：" + err.Error()
+			}
+			a.state.setVoices(voices)
+			a.invalidate()
+		})
+	}()
 }
 
 // previewSound plays the chosen sound without waiting for a completion.
@@ -300,6 +387,7 @@ func (a *App) show() {
 	if a.win == nil {
 		a.win = a.newWindow()
 	}
+	a.loadVoices()
 	a.win.Show()
 }
 

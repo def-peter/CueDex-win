@@ -159,6 +159,30 @@ mygo.WindowOptions{
   `EnumDisplayMonitors` + `SetWindowPos`（物理像素）设置，实测与真值一致。
 - 透明要显式 `c.Root().Background(ui.Transparent)`，否则根节点会刷主题背景（白底）。
 
+### 6.2 SAPI 语音枚举 spike（`cmd/sapispike`，本机 Windows 11）
+
+结论：**SAPI 可用，不需要 `go-ole`；本机有中文 voice，语音播报可以做成产品功能。**
+
+实现方式：`CoCreateInstance(CLSID_SpObjectTokenCategory)` →
+`SetId(HKLM\SOFTWARE\Microsoft\Speech\Voices)` → `EnumTokens` → 每个 token
+读 `GetId`，再打开 `Attributes` 子键读 `Name` 与 `Language`；`Language`
+是十六进制 LCID，用 `GetLocaleInfoW` 转成 `zh-CN` / `en-US`。发声是
+`CoCreateInstance(CLSID_SpVoice)` + `ISpVoice::SetVoice/Speak(SPF_ASYNC)`，
+固定在一根初始化为 MTA 的专用线程上，UI 线程只投递请求。
+
+本机枚举结果（2 个 voice）：
+
+| Token ID | 名称 | Language | 中文 |
+| --- | --- | --- | --- |
+| `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech\Voices\Tokens\TTS_MS_ZH-CN_HUIHUI_11.0` | Microsoft Huihui Desktop | zh-CN | 是 |
+| `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech\Voices\Tokens\TTS_MS_EN-US_ZIRA_11.0` | Microsoft Zira Desktop | en-US | 否 |
+
+- `ISpVoice::GetVoices` 在 SAPI 5 里不存在（那是 SAPI 4 的接口）；voice 必须从
+  `SpObjectTokenCategory` 枚举，再 `SetVoice`。
+- 异步 `Speak`（`SPF_ASYNC`）在 MTA 线程上不需要消息泵；回环峰值实测
+  **0.3780**，证明中文短语真的从默认设备播出。
+- 没有 voice 时枚举返回空表；语音选项隐藏，提示音照旧，不弹对话框。
+
 ## 7. 待验证的未知（不要用 mac 经验假设）
 
 1. **Codex 在 Windows 上如何执行 `hooks.json` 的 command** —— cmd、PowerShell
@@ -166,7 +190,7 @@ mygo.WindowOptions{
 2. Codex hooks 文件路径与 `CODEX_HOME` 在 Windows 的语义。
 3. OpenCode 在 Windows 的全局插件目录是否仍是 `~/.config/opencode/plugins/`，
    还是 `%APPDATA%\opencode`；Node 下 XDG 的解析结果。
-4. SAPI 语音枚举：用 `go-ole` 调 `SpObjectTokenCategory`，中文语音是否可用。
+4. ~~SAPI 语音枚举~~ 已解决，见 §6.2：直接 COM 可用（不需要 `go-ole`），本机有 zh-CN voice。
 5. `App.SetOpenAtLogin` 写 Run 键时是否带后台参数。
 6. `plugins/updater` 的实际能力：签名、静默安装、回滚。
 7. 未签名 exe 的 SmartScreen 实际拦截面。
