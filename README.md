@@ -32,8 +32,8 @@ Windows 11 only. macOS keeps its own repo and its own release pipeline.
 | Speech cues | SAPI `SpVoice` with installed voice enumeration |
 | Start at login | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` |
 | Codex integration | `cuedex-notify.exe` registered as a `Stop` hook command |
-| OpenCode integration | managed global plugin, same event tracking as macOS |
+| OpenCode integration | managed global plugin; tracks execution and step events, applies the rules in `PROTOCOL.md` |
 
 ## License
 
-MIT, as the macOS app.
+MIT.

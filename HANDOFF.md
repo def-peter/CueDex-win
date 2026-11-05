@@ -18,7 +18,7 @@ macOS 版（`D:\code\me\go\CueDex`，Swift）已上线。**本仓库是 Windows 
 | 语言 / 框架 | Go 1.27.3 + MyGo v0.7.4，纯原生 UI | 见下 |
 | 平台 | 只做 Windows 11（x64、arm64） | 用户明确要求 |
 | 项目结构 | 与 macOS 版分成两个仓库、两套发布 | 用户明确要求 |
-| 产品名 | `CueDex`；identifier `com.peter.CueDex`；二进制 `CueDex.exe` | 与用户数据目录 `%APPDATA%\CueDex` 对应 |
+| 产品名 | `CueDex`；identifier `com.peter.cuedex`；二进制 `CueDex.exe` | 产品就叫 CueDex；数据目录由 MyGo 的 `PathUserData` 决定，Windows 惯例是 `%APPDATA%\<Name>` |
 | module | `github.com/def-peter/cuedex-win` | `cuedex` 被现有仓库大小写冲突占用，已无法使用 |
 
 **为什么不是 Wails v3**：Wails 每个窗口是一个独立 WebView2 进程。发光覆盖层
@@ -81,7 +81,7 @@ $d = (go list -m -f '{{.Dir}}' github.com/egoist/mygo)
 | 示例 | 为什么值得读 |
 | --- | --- |
 | `examples/menubar-native` | 托盘 + 隐藏 frameless 面板 + `SkipTaskbar` + `OnBlur` 隐藏 + 右键 `PopUpMenu` 的完整骨架。**本项目的窗口结构照抄它。** |
-| `examples/chat-glow` | 用 `ui` 画边缘辉光：`Box(c).Absolute().PassThrough()` 盖满窗口，`BorderConicGradient` + `Blur` 出渐层。**这是 mac 那套 CALayer 渐变的等价物。** |
+| `examples/chat-glow` | 用 `ui` 画边缘辉光：`Box(c).Absolute().PassThrough()` 盖满窗口，`BorderConicGradient` 出渐层、`Blur` 出柔边，动画只重绘不重建 view。**本项目辉光的技术起点。** |
 | `examples/confetti` | 「poses move in frames that only paint」——动画只重绘不重建 view，几百个元素也不卡。发光动画用同一手法。 |
 | `examples/launcher` | `Panel: true` + `Transparent: true` 的浮层窗口。 |
 | `examples/frameless` | `Transparent: true` 的最小用法。 |
@@ -145,7 +145,7 @@ mygo.WindowOptions{
 ## 9. 工程约定
 
 - `gofmt`、`go vet` 必须干净；提交前跑 `go test ./...`
-- 提交信息用 Conventional Commits（和 mac 仓库一致）
+- 提交信息用 Conventional Commits
 - view 用 `ui.NewTester` 做无窗口测试，参考现有 `main_test.go`
 - 事件、偏好、播放编排这类纯逻辑要能脱离窗口测试
 - 不要动 `D:\code\me\go\CueDex`（macOS 仓库）

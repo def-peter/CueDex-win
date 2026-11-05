@@ -5,21 +5,17 @@ separate projects. They share no code. This file is the only shared contract:
 each app's integration helper must produce events that the other side's rules
 also describe, so the two implementations stay behaviourally identical.
 
-Behaviour parity only. Paths, file names and wake mechanisms follow each
-platform's conventions; the macOS rows below are reference, not something this
-app must mirror.
+This file fixes event semantics only. It says nothing about how either app is
+built, where it keeps preferences, or how it prompts the user.
 
 Prompt and response content is never written. Every field below is metadata.
 
 ## Event directory
 
-| Platform | Directory |
-| --- | --- |
-| macOS | `~/Library/Application Support/CueDex/Events` |
-| Windows | `%APPDATA%\CueDex\Events` |
-
-Created with owner-only permissions where the platform has them. The app
-watches the directory and consumes new files without polling.
+Each platform watches one directory inside its own application-support area and
+consumes new files there without polling. On Windows that directory is
+`%APPDATA%\CueDex\Events`, created with owner-only permissions. The macOS app
+documents its own location; this file does not restate it.
 
 ## Files
 
@@ -67,10 +63,6 @@ deleted after they are read.
 
 The producer must make a running app cue without the user's intervention.
 
-| Platform | Mechanism |
-| --- | --- |
-| macOS | `open -gj <CueDex.app>` |
-| Windows | start `CueDex.exe --cue`; single-instance forwards the argument to the running app |
-
-Starting the app when it is not running is acceptable; the event is fresh for
-60 seconds, so it still cues on arrival.
+On Windows the producer starts `CueDex.exe --cue`, and the single-instance lock
+forwards the argument to the running app. Starting the app when it is not
+running is acceptable, and the app still cues on arrival.
