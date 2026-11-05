@@ -4,6 +4,7 @@ package app
 
 import (
 	"bytes"
+	"errors"
 	"image"
 	"image/color"
 	"image/draw"
@@ -15,6 +16,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/def-peter/cuedex-win/internal/events"
+	"github.com/def-peter/cuedex-win/internal/integrations"
 	"github.com/def-peter/cuedex-win/internal/overlay"
 	"github.com/def-peter/cuedex-win/internal/paths"
 )
@@ -27,14 +29,21 @@ type App struct {
 	win     *mygo.Window
 	overlay *overlay.Overlay
 	watch   *events.Watcher
+	codex   integrations.CodexIntegration
 	state   settings
 }
 
-// New returns an app that keeps its files in dir.
-func New(dir paths.Dir) *App {
-	a := &App{dir: dir}
+// New returns an app that keeps its files in dir and installs hooks that run
+// exe.
+func New(dir paths.Dir, exe string) *App {
+	home, err := integrations.CodexHome()
+	if err != nil {
+		home = ""
+	}
+	a := &App{dir: dir, codex: integrations.CodexIntegration{Home: home, Exe: exe}}
 	a.state.onTogglePause = a.togglePause
 	a.state.onClose = a.hide
+	a.state.onToggleCodex = a.toggleCodex
 	return a
 }
 
@@ -83,6 +92,7 @@ func (a *App) Ready() {
 	} else {
 		a.watch = watch
 	}
+	a.refreshCodex()
 
 	// A tray app outlives every window it has: closing the panel must not
 	// end the process.
@@ -107,7 +117,7 @@ func (a *App) newWindow() *mygo.Window {
 	w := mygo.NewWindow(mygo.WindowOptions{
 		Title:             "CueDex",
 		Width:             420,
-		Height:            280,
+		Height:            360,
 		Frameless:         true,
 		DisableResize:     true,
 		DisableMinimize:   true,
@@ -156,9 +166,7 @@ func (a *App) pulse(source events.Source) {
 
 func (a *App) setPaused(paused bool) {
 	a.state.paused = paused
-	if a.win != nil {
-		a.win.Invalidate()
-	}
+	a.invalidate()
 }
 
 func (a *App) togglePause() { a.setPaused(!a.state.paused) }
@@ -173,6 +181,48 @@ func (a *App) show() {
 func (a *App) hide() {
 	if a.win != nil {
 		a.win.Close()
+	}
+}
+
+// refreshCodex reads the hooks file so the panel says what is actually there.
+func (a *App) refreshCodex() {
+	a.state.codexDetected = a.codex.Home != "" && a.codex.Detected()
+	installed, err := a.codex.Installed()
+	a.state.codexInstalled = installed
+	a.state.codexProblem = ""
+	if err != nil {
+		a.state.codexProblem = codexProblem(err)
+	}
+}
+
+// toggleCodex installs or removes the Stop hook the way the panel's button
+// asks. Both operations rewrite one file and never touch anything else in it.
+func (a *App) toggleCodex() {
+	var err error
+	if a.state.codexInstalled {
+		err = a.codex.Uninstall()
+	} else {
+		err = a.codex.Install()
+	}
+	a.refreshCodex()
+	if err != nil {
+		a.state.codexProblem = codexProblem(err)
+	}
+	a.invalidate()
+}
+
+// codexProblem says why the integration could not be changed, in the words the
+// panel shows.
+func codexProblem(err error) string {
+	if errors.Is(err, integrations.ErrInvalidHooks) {
+		return "hooks.json 结构异常，已停止写入，你的配置没有被改动"
+	}
+	return "Codex 集成操作失败：" + err.Error()
+}
+
+func (a *App) invalidate() {
+	if a.win != nil {
+		a.win.Invalidate()
 	}
 }
 

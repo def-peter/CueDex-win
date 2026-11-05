@@ -12,6 +12,9 @@ func TestParseArgs(t *testing.T) {
 		{[]string{"--background"}, options{background: true}},
 		{[]string{"--background", "--cue"}, options{cue: true, background: true}},
 		{[]string{"--cue", "extra"}, options{cue: true}},
+		{[]string{"--hook", "codex"}, options{hook: "codex"}},
+		{[]string{"--hook"}, options{}},
+		{[]string{"--hook", "codex", "--cue"}, options{hook: "codex", cue: true}},
 	} {
 		if got := parseArgs(tc.args); got != tc.want {
 			t.Errorf("parseArgs(%q) = %+v, want %+v", tc.args, got, tc.want)

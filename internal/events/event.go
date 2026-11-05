@@ -104,6 +104,25 @@ func Parse(name string, data []byte, modified time.Time) (Event, error) {
 	return Event{}, fmt.Errorf("%w: %q", ErrNotAnEvent, name)
 }
 
+// wire is the payload's shape. It is separate from Event so a producer writes
+// exactly the protocol's fields, in its order, with whole seconds.
+type wire struct {
+	Source      string `json:"source"`
+	EventID     string `json:"eventID"`
+	SessionID   string `json:"sessionID"`
+	CompletedAt int64  `json:"completedAt"`
+}
+
+// Marshal returns the payload a producer leaves in the event directory.
+func Marshal(e Event) ([]byte, error) {
+	return json.Marshal(wire{
+		Source:      string(e.Source),
+		EventID:     e.EventID,
+		SessionID:   e.SessionID,
+		CompletedAt: e.CompletedAt.Unix(),
+	})
+}
+
 // payload is the JSON body. json.Number accepts both an integer and a
 // fractional completedAt, which the protocol allows.
 type payload struct {

@@ -19,8 +19,13 @@ type settings struct {
 	// problem is why cues cannot arrive, empty when they can.
 	problem string
 
+	codexInstalled bool
+	codexDetected  bool
+	codexProblem   string
+
 	onTogglePause func()
 	onClose       func()
+	onToggleCodex func()
 }
 
 func (s *settings) view(c *ui.Context) {
@@ -47,6 +52,19 @@ func (s *settings) view(c *ui.Context) {
 		}
 		ui.Text(c, status).FontSize(12).TextColor(t.TextMuted)
 		ui.Spacer(c)
+		ui.Text(c, "Codex 集成").FontSize(14).Bold()
+		ui.Text(c, s.codexDetail()).FontSize(12).TextColor(t.TextMuted)
+		ui.Row(c).Gap(8).Children(func() {
+			label := "启用 Codex 集成"
+			if s.codexInstalled {
+				label = "停用 Codex 集成"
+			}
+			if ui.Button(c, label).Clicked() && s.onToggleCodex != nil {
+				s.onToggleCodex()
+			}
+			ui.Spacer(c)
+		})
+		ui.Spacer(c)
 		ui.Row(c).Gap(8).Children(func() {
 			label := "暂停提示"
 			if s.paused {
@@ -61,4 +79,21 @@ func (s *settings) view(c *ui.Context) {
 			}
 		})
 	})
+}
+
+// codexDetail is the line under the Codex button: what is installed, or why it
+// could not be.
+func (s *settings) codexDetail() string {
+	switch {
+	case s.codexProblem != "":
+		return s.codexProblem
+	case s.codexInstalled && !s.codexDetected:
+		return "钩子已安装，但没有找到 Codex；装好 Codex 后自动生效"
+	case s.codexInstalled:
+		return "已安装：Codex 跑完一轮回复时会提示"
+	case !s.codexDetected:
+		return "未安装，也没有找到 Codex"
+	default:
+		return "未安装：Codex 跑完一轮回复时不会提示"
+	}
 }
