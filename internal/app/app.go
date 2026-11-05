@@ -24,13 +24,14 @@ import (
 // App owns the tray icon, the settings panel, and everything the panels show.
 // Its state is read and changed on the main thread only.
 type App struct {
-	dir     paths.Dir
-	tray    *mygo.Tray
-	win     *mygo.Window
-	overlay *overlay.Overlay
-	watch   *events.Watcher
-	codex   integrations.CodexIntegration
-	state   settings
+	dir      paths.Dir
+	tray     *mygo.Tray
+	win      *mygo.Window
+	overlay  *overlay.Overlay
+	watch    *events.Watcher
+	codex    integrations.CodexIntegration
+	opencode integrations.OpenCodeIntegration
+	state    settings
 }
 
 // New returns an app that keeps its files in dir and installs hooks that run
@@ -40,10 +41,24 @@ func New(dir paths.Dir, exe string) *App {
 	if err != nil {
 		home = ""
 	}
-	a := &App{dir: dir, codex: integrations.CodexIntegration{Home: home, Exe: exe}}
+	configDir, err := integrations.OpenCodeConfigDir()
+	if err != nil {
+		configDir = ""
+	}
+	a := &App{
+		dir:   dir,
+		codex: integrations.CodexIntegration{Home: home, Exe: exe},
+		opencode: integrations.OpenCodeIntegration{
+			ConfigDir: configDir,
+			EventsDir: dir.Events(),
+			GatePath:  dir.OpenCodeGate(),
+			Exe:       exe,
+		},
+	}
 	a.state.onTogglePause = a.togglePause
 	a.state.onClose = a.hide
 	a.state.onToggleCodex = a.toggleCodex
+	a.state.onToggleOpenCode = a.toggleOpenCode
 	return a
 }
 
@@ -93,6 +108,19 @@ func (a *App) Ready() {
 		a.watch = watch
 	}
 	a.refreshCodex()
+	a.refreshOpenCode()
+
+	// Asking OpenCode for its version starts a process, so it happens off the
+	// main thread; the answer arrives before the user can press the button in
+	// almost every case.
+	go func() {
+		version, _ := integrations.DetectVersion()
+		mygo.RunOnMain(func() {
+			a.opencode.Version = version
+			a.refreshOpenCode()
+			a.invalidate()
+		})
+	}()
 
 	// A tray app outlives every window it has: closing the panel must not
 	// end the process.
@@ -117,7 +145,7 @@ func (a *App) newWindow() *mygo.Window {
 	w := mygo.NewWindow(mygo.WindowOptions{
 		Title:             "CueDex",
 		Width:             420,
-		Height:            360,
+		Height:            470,
 		Frameless:         true,
 		DisableResize:     true,
 		DisableMinimize:   true,
@@ -218,6 +246,50 @@ func codexProblem(err error) string {
 		return "hooks.json 结构异常，已停止写入，你的配置没有被改动"
 	}
 	return "Codex 集成操作失败：" + err.Error()
+}
+
+// refreshOpenCode reads the plugin and gate so the panel says what is there.
+func (a *App) refreshOpenCode() {
+	installed, err := a.opencode.Installed()
+	a.state.opencodeInstalled = installed
+	a.state.opencodeVersion = a.opencode.Version
+	a.state.opencodeProblem = ""
+	if err != nil {
+		a.state.opencodeProblem = openCodeProblem(err)
+	}
+}
+
+// toggleOpenCode installs or removes the local plugin the way the panel's
+// button asks.
+func (a *App) toggleOpenCode() {
+	var err error
+	if a.state.opencodeInstalled {
+		err = a.opencode.Uninstall()
+	} else {
+		err = a.opencode.Install()
+	}
+	a.refreshOpenCode()
+	if err != nil {
+		a.state.opencodeProblem = openCodeProblem(err)
+	}
+	a.invalidate()
+}
+
+// openCodeProblem says why the plugin could not be changed, in the words the
+// panel shows.
+func openCodeProblem(err error) string {
+	var unsupported integrations.UnsupportedVersionError
+	switch {
+	case errors.As(err, &unsupported):
+		if unsupported.Version == "" {
+			return "没有检测到 OpenCode，未安装插件"
+		}
+		return "OpenCode " + unsupported.Version + " 不在支持范围（需要 2.1.1 及以上、3.0.0 以下），未安装插件"
+	case errors.Is(err, integrations.ErrForeignPlugin):
+		return `plugins\cuedex.js 不是 CueDex 写的，已停止操作，不会覆盖或删除`
+	default:
+		return "OpenCode 集成操作失败：" + err.Error()
+	}
 }
 
 func (a *App) invalidate() {

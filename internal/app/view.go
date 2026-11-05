@@ -23,9 +23,15 @@ type settings struct {
 	codexDetected  bool
 	codexProblem   string
 
+	opencodeInstalled bool
+	opencodeVersion   string
+	opencodeProblem   string
+
 	onTogglePause func()
 	onClose       func()
 	onToggleCodex func()
+
+	onToggleOpenCode func()
 }
 
 func (s *settings) view(c *ui.Context) {
@@ -64,6 +70,18 @@ func (s *settings) view(c *ui.Context) {
 			}
 			ui.Spacer(c)
 		})
+		ui.Text(c, "OpenCode 集成").FontSize(14).Bold()
+		ui.Text(c, s.openCodeDetail()).FontSize(12).TextColor(t.TextMuted)
+		ui.Row(c).Gap(8).Children(func() {
+			label := "启用 OpenCode 集成"
+			if s.opencodeInstalled {
+				label = "停用 OpenCode 集成"
+			}
+			if ui.Button(c, label).Clicked() && s.onToggleOpenCode != nil {
+				s.onToggleOpenCode()
+			}
+			ui.Spacer(c)
+		})
 		ui.Spacer(c)
 		ui.Row(c).Gap(8).Children(func() {
 			label := "暂停提示"
@@ -95,5 +113,20 @@ func (s *settings) codexDetail() string {
 		return "未安装，也没有找到 Codex"
 	default:
 		return "未安装：Codex 跑完一轮回复时不会提示"
+	}
+}
+
+// openCodeDetail is the line under the OpenCode button. A freshly installed
+// plugin only takes effect the next time OpenCode starts, which the line says.
+func (s *settings) openCodeDetail() string {
+	switch {
+	case s.opencodeProblem != "":
+		return s.opencodeProblem
+	case s.opencodeInstalled:
+		return "已安装：重启 OpenCode 后生效，主会话跑完一轮会提示"
+	case s.opencodeVersion == "":
+		return "未检测到 OpenCode"
+	default:
+		return "未安装（检测到 OpenCode " + s.opencodeVersion + "）"
 	}
 }

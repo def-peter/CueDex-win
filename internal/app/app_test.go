@@ -31,7 +31,7 @@ func TestCueIsDroppedWhilePaused(t *testing.T) {
 func TestViewTogglesPause(t *testing.T) {
 	a := &App{}
 	a.state.onTogglePause = a.togglePause
-	tt := ui.NewTester(a.state.view, 420, 360)
+	tt := ui.NewTester(a.state.view, 420, 470)
 
 	if !tt.HasText("等待 Codex / OpenCode 的完成事件") {
 		t.Fatalf("idle panel texts %q", tt.Texts())
@@ -49,7 +49,7 @@ func TestViewShowsLastCue(t *testing.T) {
 	a.state.cueCount = 2
 	a.state.lastCue = time.Date(2026, 11, 5, 14, 32, 7, 0, time.Local)
 	a.state.lastSource = events.OpenCode
-	tt := ui.NewTester(a.state.view, 420, 360)
+	tt := ui.NewTester(a.state.view, 420, 470)
 
 	if !tt.HasText("最近一次唤醒 14:32:07（OpenCode），共 2 次") {
 		t.Fatalf("texts %q", tt.Texts())
@@ -86,7 +86,7 @@ func TestViewTogglesCodexIntegration(t *testing.T) {
 		enabled = !enabled
 		s.codexInstalled = enabled
 	}
-	tt := ui.NewTester(s.view, 420, 360)
+	tt := ui.NewTester(s.view, 420, 470)
 	if !tt.HasText("未安装：Codex 跑完一轮回复时不会提示") {
 		t.Fatalf("texts %q", tt.Texts())
 	}
@@ -121,5 +121,33 @@ func TestCodexProblemNamesTheBrokenFile(t *testing.T) {
 	}
 	if got := codexProblem(errors.New("access denied")); !strings.Contains(got, "access denied") {
 		t.Fatalf("got %q, want the cause shown", got)
+	}
+}
+
+func TestOpenCodeDetailSaysWhatIsMissing(t *testing.T) {
+	for _, tc := range []struct {
+		state settings
+		want  string
+	}{
+		{settings{opencodeInstalled: true, opencodeVersion: "2.2.5"}, "已安装：重启 OpenCode 后生效，主会话跑完一轮会提示"},
+		{settings{opencodeVersion: "2.2.5"}, "未安装（检测到 OpenCode 2.2.5）"},
+		{settings{}, "未检测到 OpenCode"},
+		{settings{opencodeProblem: "坏了"}, "坏了"},
+	} {
+		if got := tc.state.openCodeDetail(); got != tc.want {
+			t.Errorf("%+v: got %q, want %q", tc.state, got, tc.want)
+		}
+	}
+}
+
+func TestOpenCodeProblemExplainsTheVersionGate(t *testing.T) {
+	if got := openCodeProblem(integrations.UnsupportedVersionError{Version: "3.0.0"}); !strings.Contains(got, "3.0.0") {
+		t.Fatalf("got %q, want the detected version", got)
+	}
+	if got := openCodeProblem(integrations.UnsupportedVersionError{}); !strings.Contains(got, "没有检测到") {
+		t.Fatalf("got %q, want it to say OpenCode is missing", got)
+	}
+	if got := openCodeProblem(integrations.ErrForeignPlugin); !strings.Contains(got, "cuedex.js") {
+		t.Fatalf("got %q, want the file named", got)
 	}
 }
