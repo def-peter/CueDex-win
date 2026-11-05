@@ -5,14 +5,19 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+
+	"github.com/def-peter/cuedex-win/internal/events"
 )
 
 // settings is the state the panel shows and the two actions it offers. It has
 // no window of its own, so a tester can drive it without one.
 type settings struct {
-	paused   bool
-	cueCount int
-	lastCue  time.Time
+	paused     bool
+	cueCount   int
+	lastCue    time.Time
+	lastSource events.Source
+	// problem is why cues cannot arrive, empty when they can.
+	problem string
 
 	onTogglePause func()
 	onClose       func()
@@ -31,8 +36,14 @@ func (s *settings) view(c *ui.Context) {
 		switch {
 		case s.paused:
 			status = "已暂停：完成事件不会触发提示"
+		case s.problem != "":
+			status = s.problem
 		case s.cueCount > 0:
-			status = fmt.Sprintf("最近一次唤醒 %s，共 %d 次", s.lastCue.Format("15:04:05"), s.cueCount)
+			from := ""
+			if s.lastSource != "" {
+				from = "（" + s.lastSource.Label() + "）"
+			}
+			status = fmt.Sprintf("最近一次唤醒 %s%s，共 %d 次", s.lastCue.Format("15:04:05"), from, s.cueCount)
 		}
 		ui.Text(c, status).FontSize(12).TextColor(t.TextMuted)
 		ui.Spacer(c)

@@ -8,21 +8,26 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
+	"log"
 	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"github.com/def-peter/cuedex-win/internal/events"
+	"github.com/def-peter/cuedex-win/internal/overlay"
 	"github.com/def-peter/cuedex-win/internal/paths"
 )
 
 // App owns the tray icon, the settings panel, and everything the panels show.
 // Its state is read and changed on the main thread only.
 type App struct {
-	dir   paths.Dir
-	tray  *mygo.Tray
-	win   *mygo.Window
-	state settings
+	dir     paths.Dir
+	tray    *mygo.Tray
+	win     *mygo.Window
+	overlay *overlay.Overlay
+	watch   *events.Watcher
+	state   settings
 }
 
 // New returns an app that keeps its files in dir.
@@ -57,10 +62,38 @@ func (a *App) Ready() {
 	}
 	a.tray = tray
 
+	// The overlay is four layered windows on the primary display. It costs a
+	// few hundred kilobytes idle, unlike a MyGo window.
+	cue, err := overlay.Start()
+	if err != nil {
+		log.Printf("cuedex: %v", err)
+		a.state.problem = "提示层不可用：" + err.Error()
+	} else {
+		a.overlay = cue
+	}
+
+	watch, err := events.Watch(a.dir.Events(), func(e events.Event) {
+		// The watcher has its own goroutine; the app is read and changed on
+		// the main thread only.
+		mygo.RunOnMain(func() { a.pulse(e.Source) })
+	})
+	if err != nil {
+		log.Printf("cuedex: watch %s: %v", a.dir.Events(), err)
+		a.state.problem = "事件目录不可用：" + err.Error()
+	} else {
+		a.watch = watch
+	}
+
 	// A tray app outlives every window it has: closing the panel must not
 	// end the process.
 	mygo.App.OnWindowAllClosed(func() {})
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
+		if a.watch != nil {
+			a.watch.Close()
+		}
+		if a.overlay != nil {
+			a.overlay.Close()
+		}
 		if a.tray != nil {
 			a.tray.Destroy()
 		}
@@ -97,15 +130,25 @@ func (a *App) newWindow() *mygo.Window {
 	return w
 }
 
-// Cue is what a producer asks for: show the attention cue now. It is called
-// on the main thread, either from the first launch's arguments or from a
-// second launch that handed its arguments to this instance.
-func (a *App) Cue() {
+// Cue is the wake a producer asks for with "CueDex.exe --cue". The file that
+// came with it is read by the watcher, whose own cue restarts in the
+// producer's colour a moment later.
+func (a *App) Cue() { a.pulse("") }
+
+// pulse shows one cue. An empty source is a bare wake, from a producer that
+// asked the app to cue without leaving a file the app could read.
+func (a *App) pulse(source events.Source) {
 	if a.state.paused {
 		return
 	}
 	a.state.cueCount++
 	a.state.lastCue = time.Now()
+	if source != "" {
+		a.state.lastSource = source
+	}
+	if a.overlay != nil {
+		a.overlay.Show(sourceColour(source))
+	}
 	if a.win != nil {
 		a.win.Invalidate()
 	}
@@ -131,6 +174,15 @@ func (a *App) hide() {
 	if a.win != nil {
 		a.win.Close()
 	}
+}
+
+// sourceColour is each producer's colour: Codex is the product's own teal,
+// OpenCode a violet that stays legible on a light and a dark desktop.
+func sourceColour(source events.Source) color.NRGBA {
+	if source == events.OpenCode {
+		return color.NRGBA{R: 167, G: 139, B: 250, A: 255}
+	}
+	return color.NRGBA{R: 94, G: 234, B: 212, A: 255}
 }
 
 // trayIcon draws the product: four glowing edges around an empty middle.

@@ -3,6 +3,9 @@
 /.mygo/
 mygo_windows_*.syso
 
+# Local code graph index.
+/.codegraph/
+
 # Binaries
 *.exe
 *.exe~
