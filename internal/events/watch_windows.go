@@ -27,21 +27,29 @@ var (
 )
 
 const (
-	fileListDirectory   = 0x0001
-	fileShareAll        = 0x0007 // read, write, delete
-	fileFlagBackup      = 0x02000000
-	fileFlagOverlapped  = 0x40000000
-	notifyFileName      = 0x0001
-	notifyDirName       = 0x0002
-	notifySize          = 0x0008
-	notifyLastWrite     = 0x0010
-	notifyFilter        = notifyFileName | notifyDirName | notifySize | notifyLastWrite
-	waitObject0         = 0
-	waitTimeoutInfinite = 0xFFFFFFFF
+	fileListDirectory  = 0x0001
+	fileShareAll       = 0x0007 // read, write, delete
+	fileFlagBackup     = 0x02000000
+	fileFlagOverlapped = 0x40000000
+	notifyFileName     = 0x0001
+	notifyDirName      = 0x0002
+	notifySize         = 0x0008
+	notifyLastWrite    = 0x0010
+	notifyFilter       = notifyFileName | notifyDirName | notifySize | notifyLastWrite
+	waitObject0        = 0
+	waitTimeout        = 258
+	// scanInterval bounds how long a change Windows failed to announce can go
+	// unnoticed. ReadDirectoryChangesW reports what happened since the
+	// previous read completed, so a write landing between one read finishing
+	// and the next being issued is never announced. One directory read every
+	// two seconds closes that gap; a producer's wake usually scans well
+	// before this is needed.
+	scanInterval = 2000 // ms
 )
 
-// Watcher consumes the event directory without polling: Windows tells it when
-// the directory changes, and it then reads whatever is there.
+// Watcher consumes the event directory: Windows tells it when the directory
+// changes and it then reads whatever is there, and a slow rescan covers the
+// changes Windows fails to announce.
 type Watcher struct {
 	dir     string
 	deliver func(Event)
@@ -149,7 +157,7 @@ func (w *Watcher) run() {
 			3,
 			uintptr(unsafe.Pointer(&handles[0])),
 			0,
-			waitTimeoutInfinite,
+			scanInterval,
 		)
 		switch wait {
 		case waitObject0:
@@ -173,6 +181,11 @@ func (w *Watcher) run() {
 				1, // wait for the cancellation
 			)
 			return
+		case waitTimeout:
+			// Nothing was announced and nothing was asked for: look anyway,
+			// because a change can fall into the gap above. The pending read
+			// is left alone, so it still covers everything from here on.
+			w.scan()
 		default:
 			return
 		}
