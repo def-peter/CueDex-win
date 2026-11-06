@@ -69,8 +69,8 @@ NSIS 由 CLI 自动下载，签名 / 更新都还没碰。
 
 仓库：`main` 分支，远程 `origin` 已就绪。已完成：托盘外壳、事件管线、
 Codex hook、OpenCode 插件、播放编排、提示音、SAPI 语音、每屏辉光覆盖层、
-设置面板与偏好（通用 / 外观 / 提示音 / 语音 / 集成）。`main.go` 只做参数
-解析与装配。
+设置面板与偏好（通用 / 外观 / 提示音 / 语音 / 集成）、集成失败通知与诊断段、
+性能测量脚本。`main.go` 只做参数解析与装配。
 
 ## 5. 现成的参考实现（比文档可靠）
 
@@ -247,6 +247,56 @@ mygo.WindowOptions{
 - overlay 测试按 PID 过滤窗口，并用 `SendMessageTimeoutW` + `SMTO_ABORTIFHUNG`，
   否则会和运行中的 `CueDex.exe --cue` 互相干扰或挂死。
 
+### 6.5 失败提示、诊断与最终验收（`internal/app` + `scripts/measure.ps1`，本机双屏实测）
+
+结论：**三条安装失败路径都会弹通知，面板底部能查状态，五项性能指标全部达标。**
+
+`pwsh -File scripts/measure.ps1`（16 逻辑核，2560x1600@150% + 1920x1080@100%），
+连跑多轮：
+
+| 指标 | 实测 | 预算 |
+| --- | --- | --- |
+| 空闲 RSS | 20.3–20.4 MB | ≤ 60 MB |
+| 空闲 CPU | 0% 单核 | ≤ 1% |
+| 动画期 CPU（30 fps） | 4.5–5.1% 单核 | ≤ 8% |
+| 提示期 RSS 增量 | 7.9–9.0 MB | ≤ 20 MB |
+| 触发→首帧 | 3–26 ms | ≤ 100 ms |
+
+实现事实：
+
+- 通知用 `mygo.NewNotification`（Windows 上是托盘气泡），固定 ID `cuedex-problem`，
+  第二次失败替换第一次而不是堆叠，`Silent` 为真。`notifier` 是接口，
+  测试注入 `fakeNotifier` 就能验证文案，不需要通知区域也没有窗口。
+- 只有失败才通知：`toggleCodex` / `toggleOpenCode` 在返回错误时调 `notify`，
+  成功后什么都不说。三种错误各有自己的句子：版本不符（带版本号）、
+  `plugins\cuedex.js` 不是 CueDex 写的、文件被别的程序占用。
+- 文件占用的判定是 `syscall.Errno(32)`（共享冲突）与 `Errno(33)`（锁冲突），
+  由 `integrations.Busy` 收口，面板把文件名翻成「正被另一个程序占用，
+  关闭它后重试」，不把错误码丢给用户。
+- 诊断段只显示元数据：OpenCode 版本、插件文件（缺 / 是本人的 / 别人的 / 读不到）、
+  Codex 目录与 Stop 条目状态、最近一次事件的时间与 source。最近事件由 watcher
+  在内存里记，不落盘、不回读事件文件——会话内容永远不进这一段。
+- 诊断在 `show()` 时重读两个集成的文件，所以面板打开那一刻显示的是当前状态；
+  安装失败后先看通知、再打开面板看诊断，两处说的是同一件事。
+
+端到端（都是本机实测，带绝对时间戳）：
+
+| 场景 | 结果 |
+| --- | --- |
+| Codex：真实 Stop payload 跑两次（同 session/turn，间隔 4.0 s） | 只发光一次：第一次后 89–93 ms 起，第二次没有 |
+| OpenCode 2.2.5：`opencode run --standalone` 跑完整一轮（输出 `OK`） | 只发光一次，事件文件被消费，无残留 |
+| 协议层：两个文件同 `eventID`、间隔 4 s | 只发光一次：第一次写入后 18 ms 起 |
+
+本机**没有装 Codex CLI**（`where codex` 无结果），所以 Codex 那一行不是 Codex
+真的去执行 hook，而是把 `hooks.json` 里会执行的那条命令
+（`CueDex.exe --hook codex`）连上 Codex 真实的 Stop payload 直接跑。
+这条命令在 cmd 与 PowerShell 下都能跑，但「Codex 到底用哪种方式拉起它」仍未验证。
+
+测量脚本踩过的坑：PowerShell 里用 C# 轮询窗口时，`EnumWindows` 的回调不能
+每次调用现建 lambda。委托可能在原生调用期间被 GC，枚举静默失败，
+把亮着的覆盖层报成隐藏——会得出「第一次提示丢了、只有第二次生效」的错误结论，
+而实际两次都只提示一次。回调必须存成静态字段，脚本与 `HANDOFF` 都按这条写。
+
 ## 7. 待验证的未知（不要用 mac 经验假设）
 
 1. **Codex 在 Windows 上如何执行 `hooks.json` 的 command** —— cmd、PowerShell
@@ -261,6 +311,8 @@ mygo.WindowOptions{
 7. 未签名 exe 的 SmartScreen 实际拦截面。
 8. 面板失焦即关，导致语言下拉与暂停按钮无法用自动化点选；需要人工确认一次
    运行时切换语言后整窗重排没有跳动。
+9. Codex CLI 没装，集成端到端是用 `hooks.json` 里的命令加真实 payload 验证的
+   （见 §6.5），真正的「Codex 执行 hook」还差一次真机确认。
 
 ## 8. 跨项目契约
 
