@@ -3,8 +3,10 @@ package app
 import (
 	"errors"
 	"image/color"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -686,5 +688,190 @@ func TestClockLabelsRoundTrip(t *testing.T) {
 	}
 	if got := len(clockOptions()); got != 48 {
 		t.Fatalf("%d half-hour options", got)
+	}
+}
+
+// fakeNotifier records the notifications the app tried to show.
+type fakeNotifier struct {
+	shown chan [2]string
+}
+
+func newFakeNotifier() *fakeNotifier {
+	return &fakeNotifier{shown: make(chan [2]string, 4)}
+}
+
+func (f *fakeNotifier) Show(title, body string) error {
+	f.shown <- [2]string{title, body}
+	return nil
+}
+
+func (f *fakeNotifier) next(t *testing.T) string {
+	t.Helper()
+	select {
+	case message := <-f.shown:
+		if message[0] != "CueDex" {
+			t.Fatalf("notification title %q", message[0])
+		}
+		return message[1]
+	case <-time.After(2 * time.Second):
+		t.Fatal("no notification was shown")
+		return ""
+	}
+}
+
+// The three ways an install can fail each have to say why when the user is not
+// looking at the panel.
+func TestToastExplainsAnUnsupportedOpenCode(t *testing.T) {
+	dir := t.TempDir()
+	toasts := newFakeNotifier()
+	a := &App{
+		prefs: prefs.Default(),
+		opencode: integrations.OpenCodeIntegration{
+			ConfigDir: dir,
+			EventsDir: filepath.Join(dir, "events"),
+			GatePath:  filepath.Join(dir, "gate"),
+			Version:   "3.0.0",
+		},
+		toasts: toasts,
+	}
+
+	a.toggleOpenCode()
+
+	if body := toasts.next(t); !strings.Contains(body, "3.0.0") || !strings.Contains(body, "支持范围") {
+		t.Fatalf("notification %q", body)
+	}
+}
+
+func TestToastExplainsAForeignPlugin(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "plugins"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "plugins", "cuedex.js")
+	if err := os.WriteFile(path, []byte("// someone else's plugin\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	toasts := newFakeNotifier()
+	a := &App{
+		prefs: prefs.Default(),
+		opencode: integrations.OpenCodeIntegration{
+			ConfigDir: dir,
+			EventsDir: filepath.Join(dir, "events"),
+			GatePath:  filepath.Join(dir, "gate"),
+			Version:   "2.2.5",
+		},
+		toasts: toasts,
+	}
+
+	a.toggleOpenCode()
+
+	if body := toasts.next(t); !strings.Contains(body, "cuedex.js") || !strings.Contains(body, "不是 CueDex") {
+		t.Fatalf("notification %q", body)
+	}
+}
+
+func TestToastExplainsAFileInUse(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "hooks.json")
+	if err := os.WriteFile(path, []byte(`{"hooks":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	name, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := syscall.CreateFile(name, syscall.GENERIC_READ, 0, nil, syscall.OPEN_EXISTING, syscall.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.CloseHandle(held)
+	toasts := newFakeNotifier()
+	a := &App{
+		prefs:  prefs.Default(),
+		codex:  integrations.CodexIntegration{Home: home, Exe: "CueDex.exe"},
+		toasts: toasts,
+	}
+
+	a.toggleCodex()
+
+	if body := toasts.next(t); !strings.Contains(body, "hooks.json") || !strings.Contains(body, "占用") {
+		t.Fatalf("notification %q", body)
+	}
+}
+
+// TestNotificationsAreQuietWhenNothingFailed keeps a successful install from
+// telling the user about it.
+func TestNotificationsAreQuietWhenNothingFailed(t *testing.T) {
+	toasts := newFakeNotifier()
+	a := &App{prefs: prefs.Default(), toasts: toasts}
+	a.notify(problem{})
+	select {
+	case message := <-toasts.shown:
+		t.Fatalf("notified %q", message[1])
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestDiagnosticsReportBothIntegrations(t *testing.T) {
+	home := t.TempDir()
+	config := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(config, "plugins"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, "plugins", "cuedex.js"), []byte("// stranger\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := &App{
+		prefs:    prefs.Default(),
+		codex:    integrations.CodexIntegration{Home: home, Exe: "CueDex.exe"},
+		opencode: integrations.OpenCodeIntegration{ConfigDir: config, Version: "2.2.5"},
+	}
+	a.state.diag.lastEvent = time.Date(2026, 11, 6, 14, 32, 7, 0, time.Local)
+	a.state.diag.lastSource = events.OpenCode
+
+	a.refreshDiagnostics()
+
+	if a.state.diag.plugin != pluginForeign {
+		t.Errorf("plugin state %v", a.state.diag.plugin)
+	}
+	if a.state.diag.hooks != hooksMissing {
+		t.Errorf("hooks state %v", a.state.diag.hooks)
+	}
+	if !a.state.diag.codexDetected {
+		t.Error("the Codex directory was not detected")
+	}
+	lines := strings.Join([]string{
+		a.state.diag.versionLine(chinese),
+		a.state.diag.pluginLine(chinese),
+		a.state.diag.codexLine(chinese),
+		a.state.diag.lastEventLine(chinese),
+	}, "\n")
+	for _, want := range []string{
+		"OpenCode 版本：2.2.5",
+		"插件文件：存在，但不是 CueDex 写的",
+		"Codex：目录已找到，未安装 Stop 钩子",
+		"最近一次事件：14:32:07（OpenCode）",
+	} {
+		if !strings.Contains(lines, want) {
+			t.Errorf("diagnostics do not show %q:\n%s", want, lines)
+		}
+	}
+}
+
+func TestPanelShowsDiagnosticsInItsLanguage(t *testing.T) {
+	a := &App{prefs: prefs.Default()}
+	a.state.applyGeneral(prefs.General{Language: prefs.LanguageEnglish, Enabled: true}, time.Now())
+	a.state.diag.plugin = pluginOurs
+	a.state.diag.codexDetected = true
+	a.state.diag.hooks = hooksOurs
+	tt := ui.NewTester(a.state.view, 420, 1400)
+
+	for _, want := range []string{"Diagnostics", "Plugin file: installed", "Codex: directory found, Stop hook installed"} {
+		if !tt.HasText(want) {
+			t.Fatalf("%q missing from %q", want, tt.Texts())
+		}
+	}
+	if tt.HasText("诊断") {
+		t.Fatalf("Chinese diagnostics are still shown: %q", tt.Texts())
 	}
 }

@@ -21,6 +21,7 @@ const (
 	openCodeForeign
 	openCodeOther
 	autostartProblem
+	busyProblem
 )
 
 // problem is one failure, or the zero value for none.
@@ -66,6 +67,8 @@ func (p problem) text(t wording) string {
 		return fmt.Sprintf(t.ProblemOpenOther, p.detail)
 	case autostartProblem:
 		return fmt.Sprintf(t.ProblemAutostart, p.detail)
+	case busyProblem:
+		return fmt.Sprintf(t.ProblemBusy, p.detail)
 	}
 	return ""
 }

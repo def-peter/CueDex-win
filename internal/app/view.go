@@ -66,6 +66,10 @@ type settings struct {
 	opencodeVersion   string
 	opencodeProblem   problem
 
+	// diag is the last section's snapshot of both integrations and the event
+	// stream.
+	diag diagnostic
+
 	codexSound    soundSettings
 	opencodeSound soundSettings
 	soundProblem  problem
@@ -443,6 +447,8 @@ func (s *settings) view(c *ui.Context) {
 				}
 				ui.Divider(c)
 				s.integrationSection(c, theme, t)
+				ui.Divider(c)
+				s.diagnosticSection(c, theme, t)
 			})
 		})
 		ui.Row(c).Gap(8).Children(func() {
@@ -679,6 +685,21 @@ func (s *settings) integrationSection(c *ui.Context, theme *ui.Theme, t wording)
 		}
 		ui.Spacer(c)
 	})
+}
+
+// diagnosticSection says what the app found, so a failing install has somewhere
+// to be looked at after the notification is gone.
+func (s *settings) diagnosticSection(c *ui.Context, theme *ui.Theme, t wording) {
+	ui.Text(c, t.Diagnostics).FontSize(14).Bold()
+	for _, line := range []string{
+		s.diag.versionLine(t),
+		s.diag.pluginLine(t),
+		s.diag.codexLine(t),
+		s.diag.lastEventLine(t),
+	} {
+		ui.Text(c, line).FontSize(12).TextColor(theme.TextMuted)
+	}
+	ui.Text(c, t.DiagHint).FontSize(12).TextColor(theme.TextMuted)
 }
 
 // codexDetail is the line under the Codex button: what is installed, or why it

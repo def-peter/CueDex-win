@@ -67,6 +67,8 @@ type App struct {
 	pauseTimer *time.Timer
 	// autostart is the Run entry the panel's switch writes.
 	autostart autostart.Entry
+	// toasts reports a failure outside the panel; a test records them.
+	toasts notifier
 	// voices are the installed SAPI voices. They are read once in the
 	// background; until then the panel hides the speech section.
 	voices        []speech.Voice
@@ -114,6 +116,7 @@ func New(dir paths.Dir, exe string) *App {
 		speech:    speech.New(),
 		prefs:     stored,
 		prefsPath: dir.Preferences(),
+		toasts:    toast{},
 	}
 	a.state.applyGeneral(stored.General, time.Now())
 	a.state.applyDisplay(stored)
@@ -176,9 +179,15 @@ func (a *App) Ready() {
 	// nothing.
 	watch, err := events.Watch(a.dir.Events(), func(e events.Event) {
 		mygo.RunOnMain(func() {
+			// The diagnostics section reports the newest completion even when
+			// the user has cues switched off: knowing the plugin works is the
+			// point of that section.
+			a.state.diag.lastEvent = time.Now()
+			a.state.diag.lastSource = e.Source
 			if a.prefs.Cues(e.Source, time.Now()) {
 				a.player.Submit(e)
 			}
+			a.invalidate()
 		})
 	})
 	if err != nil {
@@ -561,6 +570,8 @@ func (a *App) setPaused(paused bool) {
 func (a *App) togglePause() { a.setPaused(!a.state.paused) }
 
 func (a *App) show() {
+	a.refreshCodex()
+	a.refreshOpenCode()
 	if a.win == nil {
 		a.win = a.newWindow()
 	}
@@ -587,6 +598,7 @@ func (a *App) refreshCodex() {
 	if err != nil {
 		a.state.codexProblem = codexProblem(err)
 	}
+	a.refreshDiagnostics()
 }
 
 // toggleCodex installs or removes the Stop hook the way the panel's button
@@ -601,6 +613,7 @@ func (a *App) toggleCodex() {
 	a.refreshCodex()
 	if err != nil {
 		a.state.codexProblem = codexProblem(err)
+		a.notify(a.state.codexProblem)
 	}
 	a.invalidate()
 }
@@ -608,8 +621,11 @@ func (a *App) toggleCodex() {
 // codexProblem says why the integration could not be changed, in the words the
 // panel shows.
 func codexProblem(err error) problem {
-	if errors.Is(err, integrations.ErrInvalidHooks) {
+	switch {
+	case errors.Is(err, integrations.ErrInvalidHooks):
 		return problem{kind: hooksProblem}
+	case integrations.Busy(err):
+		return newProblem(busyProblem, "hooks.json")
 	}
 	return newProblem(codexProblemKind, err.Error())
 }
@@ -623,6 +639,7 @@ func (a *App) refreshOpenCode() {
 	if err != nil {
 		a.state.opencodeProblem = openCodeProblem(err)
 	}
+	a.refreshDiagnostics()
 }
 
 // toggleOpenCode installs or removes the local plugin the way the panel's
@@ -637,6 +654,7 @@ func (a *App) toggleOpenCode() {
 	a.refreshOpenCode()
 	if err != nil {
 		a.state.opencodeProblem = openCodeProblem(err)
+		a.notify(a.state.opencodeProblem)
 	}
 	a.invalidate()
 }
@@ -653,6 +671,8 @@ func openCodeProblem(err error) problem {
 		return newProblem(openCodeUnsupported, unsupported.Version)
 	case errors.Is(err, integrations.ErrForeignPlugin):
 		return problem{kind: openCodeForeign}
+	case integrations.Busy(err):
+		return newProblem(busyProblem, `plugins\cuedex.js`)
 	default:
 		return newProblem(openCodeOther, err.Error())
 	}

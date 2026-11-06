@@ -75,6 +75,22 @@ type wording struct {
 	EnableOpen    string
 	DisableOpen   string
 
+	Diagnostics              string
+	DiagHint                 string
+	DiagOpenVersion          string // fmt: version
+	DiagOpenMissing          string
+	DiagPluginOurs           string
+	DiagPluginMissing        string
+	DiagPluginForeign        string
+	DiagPluginUnreadable     string
+	DiagCodexMissing         string
+	DiagCodexHooksOurs       string
+	DiagCodexHooksMissing    string
+	DiagCodexHooksInvalid    string
+	DiagCodexHooksUnreadable string
+	DiagLastEvent            string // fmt: time, source
+	DiagNoEvent              string
+
 	Close        string
 	PauseCues    string
 	OpenSettings string
@@ -101,6 +117,7 @@ type wording struct {
 	ProblemOpenForeign      string
 	ProblemOpenOther        string
 	ProblemAutostart        string
+	ProblemBusy             string
 }
 
 var chinese = wording{
@@ -166,6 +183,22 @@ var chinese = wording{
 	EnableOpen:    "启用 OpenCode 集成",
 	DisableOpen:   "停用 OpenCode 集成",
 
+	Diagnostics:              "诊断",
+	DiagHint:                 "只显示状态与时间，不读取、不记录会话内容",
+	DiagOpenVersion:          "OpenCode 版本：%s",
+	DiagOpenMissing:          "OpenCode 版本：未检测到",
+	DiagPluginOurs:           "插件文件：已安装",
+	DiagPluginMissing:        "插件文件：未安装",
+	DiagPluginForeign:        `插件文件：存在，但不是 CueDex 写的`,
+	DiagPluginUnreadable:     "插件文件：读不到",
+	DiagCodexMissing:         "Codex：未检测到",
+	DiagCodexHooksOurs:       "Codex：目录已找到，Stop 钩子已安装",
+	DiagCodexHooksMissing:    "Codex：目录已找到，未安装 Stop 钩子",
+	DiagCodexHooksInvalid:    "Codex：hooks.json 结构异常",
+	DiagCodexHooksUnreadable: "Codex：hooks.json 读不到",
+	DiagLastEvent:            "最近一次事件：%s%s",
+	DiagNoEvent:              "最近一次事件：还没有收到",
+
 	Close:        "关闭",
 	PauseCues:    "暂停提示",
 	OpenSettings: "打开设置",
@@ -192,6 +225,7 @@ var chinese = wording{
 	ProblemOpenForeign:      `plugins\cuedex.js 不是 CueDex 写的，已停止操作，不会覆盖或删除`,
 	ProblemOpenOther:        "OpenCode 集成操作失败：%s",
 	ProblemAutostart:        "开机自启设置失败：%s",
+	ProblemBusy:             "%s 正被另一个程序占用，关闭它后重试",
 }
 
 var english = wording{
@@ -257,6 +291,22 @@ var english = wording{
 	EnableOpen:    "Enable OpenCode integration",
 	DisableOpen:   "Disable OpenCode integration",
 
+	Diagnostics:              "Diagnostics",
+	DiagHint:                 "State and times only; the conversation is never read or recorded",
+	DiagOpenVersion:          "OpenCode version: %s",
+	DiagOpenMissing:          "OpenCode version: not detected",
+	DiagPluginOurs:           "Plugin file: installed",
+	DiagPluginMissing:        "Plugin file: not installed",
+	DiagPluginForeign:        `Plugin file: present, but not written by CueDex`,
+	DiagPluginUnreadable:     "Plugin file: cannot be read",
+	DiagCodexMissing:         "Codex: not detected",
+	DiagCodexHooksOurs:       "Codex: directory found, Stop hook installed",
+	DiagCodexHooksMissing:    "Codex: directory found, Stop hook not installed",
+	DiagCodexHooksInvalid:    "Codex: hooks.json is malformed",
+	DiagCodexHooksUnreadable: "Codex: hooks.json cannot be read",
+	DiagLastEvent:            "Latest event: %s%s",
+	DiagNoEvent:              "Latest event: none received yet",
+
 	Close:        "Close",
 	PauseCues:    "Pause cues",
 	OpenSettings: "Open settings",
@@ -283,6 +333,7 @@ var english = wording{
 	ProblemOpenForeign:      `plugins\cuedex.js was not written by CueDex; nothing was overwritten or deleted`,
 	ProblemOpenOther:        "OpenCode integration failed: %s",
 	ProblemAutostart:        "Startup entry failed: %s",
+	ProblemBusy:             "%s is open in another program. Close it and try again",
 }
 
 // copyFor is the table for a resolved language.
