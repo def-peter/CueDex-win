@@ -131,8 +131,11 @@ func (p *Player) stopLocked() {
 type wav struct {
 	data       int
 	length     int
+	channels   int
+	rate       int
 	byteRate   int
 	blockAlign int
+	bits       int
 }
 
 func parseWAV(b []byte) (wav, error) {
@@ -166,6 +169,7 @@ func parseWAV(b []byte) (wav, error) {
 				return wav{}, ErrUnsupported
 			}
 			found.byteRate, found.blockAlign = byteRate, blockAlign
+			found.channels, found.rate, found.bits = channels, rate, bits
 			haveFmt = true
 		case "data":
 			found.data, found.length = body, size

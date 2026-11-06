@@ -7,32 +7,44 @@ import (
 	"github.com/def-peter/cuedex-win/internal/overlay"
 )
 
-// Palette is every colour a producer may glow in. The strings are the hex form
-// a preferences file holds, so a value never changes meaning.
-var Palette = []string{
-	"#5EEAD4", // teal, the product colour
-	"#A78BFA", // violet
-	"#60A5FA", // blue
-	"#F472B6", // pink
-	"#FBBF24", // amber
-	"#34D399", // green
-	"#F87171", // coral
-	"#94A3B8", // slate
-}
+// The defaults keep one product colour across both effects: 单色呼吸 pulses in
+// the blue, and 双色交替闪烁 keeps that blue as its primary and adds the red
+// the mac app flashes as a warning accent.
+const (
+	// DefaultColour is the one colour 单色呼吸 pulses in: the product blue.
+	DefaultColour = "#3D94FF"
+	// DefaultFlashPrimary is the main colour of 双色交替闪烁, the same blue, and
+	// DefaultFlashSecondary the red it alternates with, as a warning light.
+	DefaultFlashPrimary   = DefaultColour
+	DefaultFlashSecondary = "#FF141F"
+)
 
-// DefaultColors is the colour each producer glows in on a fresh install, one
-// per producer so the two are told apart at a glance.
+// DefaultColors is the appearance each producer has on a fresh install. Both
+// start in 单色呼吸 with the product blue, as the mac app does.
 var DefaultColors = DisplayChoices{
-	Codex:    DisplayPreferences{Enabled: true, Animation: overlay.Breathing, Color: "#5EEAD4"},
-	OpenCode: DisplayPreferences{Enabled: true, Animation: overlay.AlternatingFlash, Color: "#A78BFA"},
+	Codex: DisplayPreferences{
+		Enabled: true, Animation: overlay.Breathing,
+		Color: DefaultColour, Primary: DefaultFlashPrimary, Secondary: DefaultFlashSecondary,
+	},
+	OpenCode: DisplayPreferences{
+		Enabled: true, Animation: overlay.Breathing,
+		Color: DefaultColour, Primary: DefaultFlashPrimary, Secondary: DefaultFlashSecondary,
+	},
 }
 
-// DisplayPreferences is one producer's presentation: whether it is drawn at
-// all, how it moves, and what colour it glows.
+// DisplayPreferences is one producer's appearance: whether it is drawn at all,
+// how it moves, and the colours it moves in.
 type DisplayPreferences struct {
 	Enabled   bool              `json:"enabled"`
 	Animation overlay.Animation `json:"animation"`
-	Color     string            `json:"color"`
+	// Color is the colour of 单色呼吸.
+	Color string `json:"color"`
+	// Primary and Secondary are the pair 双色交替闪烁 alternates. They are kept
+	// apart from Color because the two effects are chosen separately: switching
+	// the effect must not repaint the other one, and each keeps a sensible
+	// default of its own.
+	Primary   string `json:"primary,omitempty"`
+	Secondary string `json:"secondary,omitempty"`
 }
 
 // DisplayChoices is one presentation per producer.
@@ -41,21 +53,41 @@ type DisplayChoices struct {
 	OpenCode DisplayPreferences `json:"opencode"`
 }
 
-// Colour is the producer's glow. Normalized has already checked the string, so
-// this only guards against a value built by hand.
+// Colour is the colour of 单色呼吸. Normalized has already checked the string,
+// so this only guards against a value built by hand.
 func (d DisplayPreferences) Colour() color.NRGBA {
 	if c, ok := ParseColour(d.Color); ok {
 		return c
 	}
-	c, _ := ParseColour(Palette[0])
+	c, _ := ParseColour(DefaultColour)
 	return c
 }
 
-// Secondary is the colour the two-colour flash alternates with: the same
-// saturation and brightness, one hue step round, so a colour the user picked
-// still has a partner instead of a fixed second colour that might clash.
-func (d DisplayPreferences) Secondary() color.NRGBA {
-	return shiftHue(d.Colour(), 40)
+// FlashPrimary and FlashSecondary are the pair 双色交替闪烁 alternates.
+func (d DisplayPreferences) FlashPrimary() color.NRGBA {
+	if c, ok := ParseColour(d.Primary); ok {
+		return c
+	}
+	c, _ := ParseColour(DefaultFlashPrimary)
+	return c
+}
+
+func (d DisplayPreferences) FlashSecondary() color.NRGBA {
+	if c, ok := ParseColour(d.Secondary); ok {
+		return c
+	}
+	c, _ := ParseColour(DefaultFlashSecondary)
+	return c
+}
+
+// Cue is the pair the overlay draws with. 单色呼吸 uses one colour and ignores
+// the second; 双色交替闪烁 alternates the stored pair.
+func (d DisplayPreferences) Cue() (primary, secondary color.NRGBA) {
+	if d.Animation == overlay.AlternatingFlash {
+		return d.FlashPrimary(), d.FlashSecondary()
+	}
+	c := d.Colour()
+	return c, c
 }
 
 // CanDraw reports whether this producer is drawn.
@@ -83,17 +115,14 @@ func normalizeDisplay(d DisplayPreferences, fallback DisplayPreferences) Display
 	if !d.Animation.Valid() {
 		d.Animation = overlay.Breathing
 	}
-	if _, ok := ParseColour(d.Color); !ok || !inPalette(d.Color) {
+	if _, ok := ParseColour(d.Color); !ok {
 		d.Color = fallback.Color
 	}
-	return d
-}
-
-func inPalette(hex string) bool {
-	for _, known := range Palette {
-		if known == hex {
-			return true
-		}
+	if _, ok := ParseColour(d.Primary); !ok {
+		d.Primary = fallback.Primary
 	}
-	return false
+	if _, ok := ParseColour(d.Secondary); !ok {
+		d.Secondary = fallback.Secondary
+	}
+	return d
 }

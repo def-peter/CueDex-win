@@ -4,11 +4,13 @@ import (
 	"image/color"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/def-peter/cuedex-win/internal/events"
 	"github.com/def-peter/cuedex-win/internal/overlay"
+	"github.com/def-peter/cuedex-win/internal/recordings"
 )
 
 func TestDefaultGivesEachProducerItsOwnSound(t *testing.T) {
@@ -163,6 +165,69 @@ func TestSpeechChoicesSurviveASave(t *testing.T) {
 	}
 }
 
+func TestAnnouncementDefaultsToTheSystemVoiceAndTheDefaultClip(t *testing.T) {
+	p := Default()
+	for _, source := range []events.Source{events.Codex, events.OpenCode} {
+		if got := p.Speech.Mode(source); got != SpeechSystem {
+			t.Errorf("%s announces with %q, want the system voice", source, got)
+		}
+		if got := p.Speech.Recording(source); got != recordings.DefaultID {
+			t.Errorf("%s plays %q, want the default clip", source, got)
+		}
+	}
+}
+
+func TestSpeechModeAndClipSurviveASave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "preferences.json")
+	want := Default().SetSpeech(SpeechPreferences{
+		Codex:             true,
+		CodexMode:         SpeechRecording,
+		CodexRecording:    "check-your-messages-female",
+		OpenCode:          true,
+		OpenCodeMode:      SpeechSystem,
+		OpenCodeRecording: "message-reminder-female",
+	})
+	if err := Save(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("loaded %+v, want %+v", got.Speech, want.Speech)
+	}
+	if got.Speech.Mode(events.Codex) != SpeechRecording {
+		t.Fatal("Codex lost its recorded announcement")
+	}
+	if got.Speech.Recording(events.Codex) != "check-your-messages-female" {
+		t.Fatalf("Codex plays %q", got.Speech.Recording(events.Codex))
+	}
+}
+
+func TestAnUnknownSpeechModeOrClipFallsBack(t *testing.T) {
+	p := Default().SetSpeech(SpeechPreferences{
+		CodexMode:      "telepathy",
+		CodexRecording: "not-a-clip",
+		OpenCodeMode:   SpeechRecording,
+	})
+	if p.Speech.CodexMode != "" {
+		t.Fatalf("an unknown mode was kept: %q", p.Speech.CodexMode)
+	}
+	if got := p.Speech.Mode(events.Codex); got != SpeechSystem {
+		t.Fatalf("an unknown mode announced with %q", got)
+	}
+	if got := p.Speech.Recording(events.Codex); got != recordings.DefaultID {
+		t.Fatalf("an unknown clip played %q", got)
+	}
+	if got := p.Speech.Mode(events.OpenCode); got != SpeechRecording {
+		t.Fatalf("recording mode was lost: %q", got)
+	}
+	if got := p.Speech.Recording(events.OpenCode); got != recordings.DefaultID {
+		t.Fatalf("a file with no clip played %q", got)
+	}
+}
+
 func TestQuietHoursCrossMidnight(t *testing.T) {
 	quiet := QuietHours{Enabled: true, Start: 22 * 60, End: 7 * 60}
 	cases := []struct {
@@ -273,8 +338,8 @@ func TestNormalizedRepairsTheDisplayBlock(t *testing.T) {
 	if p.Display.Codex.Color != DefaultColors.Codex.Color {
 		t.Fatalf("an invalid colour stayed: %q", p.Display.Codex.Color)
 	}
-	if p.Display.OpenCode.Color != DefaultColors.OpenCode.Color {
-		t.Fatalf("a colour outside the palette stayed: %q", p.Display.OpenCode.Color)
+	if p.Display.OpenCode.Color != "#123456" {
+		t.Fatalf("a colour the picker can set was replaced: %q", p.Display.OpenCode.Color)
 	}
 	if p.Display.OpenCode.Animation != overlay.AlternatingFlash {
 		t.Fatalf("a valid animation was changed: %v", p.Display.OpenCode.Animation)
@@ -326,5 +391,184 @@ func TestDisplayChoicesSurviveASave(t *testing.T) {
 	}
 	if got.Display.OpenCode.Colour() != (color.NRGBA{R: 0xF4, G: 0x72, B: 0xB6, A: 255}) {
 		t.Fatalf("the colour came back as %v", got.Display.OpenCode.Colour())
+	}
+}
+
+func TestEachEffectDrawsItsOwnColours(t *testing.T) {
+	pair := DisplayPreferences{
+		Color:     "#5EEAD4",
+		Primary:   "#F472B6",
+		Secondary: "#A78BFA",
+	}
+	if got, want := pair.FlashSecondary(), (color.NRGBA{R: 0xA7, G: 0x8B, B: 0xFA, A: 255}); got != want {
+		t.Fatalf("flash partner = %v, want %v", got, want)
+	}
+	// Monochrome breathing draws one colour and ignores the pair.
+	breathing := pair
+	breathing.Animation = overlay.Breathing
+	primary, secondary := breathing.Cue()
+	if primary != breathing.Colour() || secondary != primary {
+		t.Fatalf("breathing draws %v and %v", primary, secondary)
+	}
+	// The two-color flash draws the pair, not the single colour.
+	flash := pair
+	flash.Animation = overlay.AlternatingFlash
+	primary, secondary = flash.Cue()
+	if primary != flash.FlashPrimary() || secondary != flash.FlashSecondary() {
+		t.Fatalf("the flash draws %v and %v", primary, secondary)
+	}
+	// A string that is not a colour falls back to the default pair rather than
+	// reaching the overlay.
+	repaired := Default().
+		SetDisplay(events.Codex, DisplayPreferences{Color: "#5EEAD4", Primary: "not-a-colour", Secondary: "nope"}).
+		Display.Codex
+	if repaired.Primary != DefaultFlashPrimary || repaired.Secondary != DefaultFlashSecondary {
+		t.Fatalf("a broken pair survived as %q / %q", repaired.Primary, repaired.Secondary)
+	}
+}
+
+func TestSpeechTextIsTrimmedAndCapped(t *testing.T) {
+	long := strings.Repeat("提", MaxText+40)
+	p := Default().SetSpeech(SpeechPreferences{CodexText: "  " + long + "  "})
+	if got := p.Speech.Text(events.Codex); len([]rune(got)) != MaxText {
+		t.Fatalf("stored phrase is %d runes, want %d", len([]rune(got)), MaxText)
+	}
+	if got := p.Speech.Text(events.OpenCode); got != "" {
+		t.Fatalf("opencode picked up codex's phrase: %q", got)
+	}
+	empty := Default()
+	if got := empty.Speech.Text(events.Codex); got != "" {
+		t.Fatalf("a fresh install speaks %q instead of the built-in phrase", got)
+	}
+}
+
+func TestSetTextChangesOnlyOneProducer(t *testing.T) {
+	p := Default().SetSpeech(SpeechPreferences{CodexText: "a", OpenCodeText: "b"})
+	updated := p.SetSpeech(p.Speech.SetText(events.OpenCode, "c"))
+	if updated.Speech.OpenCodeText != "c" || updated.Speech.CodexText != "a" {
+		t.Fatalf("phrases are %q and %q", updated.Speech.CodexText, updated.Speech.OpenCodeText)
+	}
+}
+
+func TestSpeechTextSurvivesASave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "preferences.json")
+	want := Default().SetSpeech(SpeechPreferences{Codex: true, CodexText: "Codex 已完成，请回来查看。"})
+	if err := Save(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("loaded %+v, want %+v", got, want)
+	}
+}
+
+func TestFreshInstallBreathesBlueAndFlashesBlueThenRed(t *testing.T) {
+	p := Default()
+	for _, source := range []events.Source{events.Codex, events.OpenCode} {
+		d := p.Display.For(source)
+		if d.Animation != overlay.Breathing {
+			t.Errorf("%s starts in %v, want Monochrome Breathing", source, d.Animation)
+		}
+		if d.Color != DefaultColour {
+			t.Errorf("%s breathes in %q, want %q", source, d.Color, DefaultColour)
+		}
+		if got := d.Colour(); got != (color.NRGBA{R: 0x3D, G: 0x94, B: 0xFF, A: 255}) {
+			t.Errorf("%s resolves to %v", source, got)
+		}
+		// The flash keeps the same blue as its main colour and adds the red.
+		if got := d.FlashPrimary(); got != d.Colour() {
+			t.Errorf("%s flashes %v first, want the product blue", source, got)
+		}
+		if got := d.FlashSecondary(); got != (color.NRGBA{R: 0xFF, G: 0x14, B: 0x1F, A: 255}) {
+			t.Errorf("%s alternates with %v, want the red", source, got)
+		}
+	}
+}
+
+func TestUpgradeSwapsTheVersionFourFlashPair(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "preferences.json")
+	body := `{"version":4,"display":{"codex":{"enabled":true,"animation":"alternating-flash","color":"#3D94FF","primary":"#FF141F","secondary":"#267AFF"}}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := p.Display.Codex
+	if d.Primary != DefaultFlashPrimary || d.Secondary != DefaultFlashSecondary {
+		t.Fatalf("the version four pair survived as %q / %q", d.Primary, d.Secondary)
+	}
+}
+
+// TestUpgradeKeepsAChosenFlashPair stops the version 5 swap from repainting a
+// pair the user picked.
+func TestUpgradeKeepsAChosenFlashPair(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "preferences.json")
+	body := `{"version":4,"display":{"codex":{"enabled":true,"animation":"alternating-flash","color":"#3D94FF","primary":"#F472B6","secondary":"#A78BFA"}}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := p.Display.Codex
+	if d.Primary != "#F472B6" || d.Secondary != "#A78BFA" {
+		t.Fatalf("a chosen pair became %q / %q", d.Primary, d.Secondary)
+	}
+}
+
+func TestOlderFileGetsTheDefaultFlashPair(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "preferences.json")
+	body := `{"version":3,"display":{"codex":{"enabled":true,"animation":"alternating-flash","color":"#3D94FF","secondary":"#A78BFA"}}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := p.Display.Codex
+	if d.Color != "#3D94FF" {
+		t.Fatalf("the single colour was lost: %q", d.Color)
+	}
+	if d.Primary != DefaultFlashPrimary || d.Secondary != DefaultFlashSecondary {
+		t.Fatalf("the old violet survived as %q / %q", d.Primary, d.Secondary)
+	}
+}
+
+func TestUpgradeMovesTheOldDefaultColoursToBlue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "preferences.json")
+	body := `{"version":2,"display":{
+		"codex":{"enabled":true,"animation":"breathing","color":"#5EEAD4"},
+		"opencode":{"enabled":true,"animation":"alternating-flash","color":"#A78BFA"}}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Display.Codex.Color != DefaultColour || p.Display.OpenCode.Color != DefaultColour {
+		t.Fatalf("old defaults survived: %+v", p.Display)
+	}
+}
+
+func TestUpgradeKeepsAColourTheUserPicked(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "preferences.json")
+	body := `{"version":2,"display":{"codex":{"enabled":true,"animation":"breathing","color":"#F87171"}}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Display.Codex.Color != "#F87171" {
+		t.Fatalf("a chosen colour was replaced by %q", p.Display.Codex.Color)
 	}
 }

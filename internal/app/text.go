@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/def-peter/cuedex-win/internal/i18n"
-	"github.com/def-peter/cuedex-win/internal/prefs"
+	"github.com/def-peter/cuedex-win/internal/recordings"
 	"github.com/def-peter/cuedex-win/internal/sound"
 )
 
@@ -20,13 +20,17 @@ type wording struct {
 	LastCue    string // fmt: time, source suffix, count
 	FromSource string // fmt: source label, " (OpenCode)"
 
-	General     string
-	Master      string
-	MasterHint  string
-	Language    string
-	LangSystem  string
-	LangChinese string
-	LangEnglish string
+	General       string
+	GeneralHint   string
+	SettingsTitle string
+	Master        string
+	MasterHint    string
+	Language      string
+	LangSystem    string
+	LangChinese   string
+	LangEnglish   string
+	TabCues       string
+	TabAbout      string
 
 	Pause      string
 	Pause15    string
@@ -44,13 +48,37 @@ type wording struct {
 	Autostart     string
 	AutostartHint string
 
+	Product      string
+	AboutVersion string // fmt: version
+	AboutDev     string
+	AboutTagline string
+
+	Sources              string
+	CueFor               string // fmt: source label
+	CueHint              string
+	Glow                 string
+	SoundPane            string
+	NotificationSound    string
+	EnableGlow           string
+	GlowHint             string
+	MainColour           string
+	SecondaryColourLabel string
+	FlashHint            string
+	TestGlow             string
+	EnableSound          string
+	TestSound            string
+	TestSpeech           string
+	SpeechEnable         string
+	SpeechText           string
+	SpeechTextLabel      string
+	PreviewNote          string
+
 	Appearance string
 	SourceOn   string
-	Animation  string
+	Effect     string
 	Breathing  string
 	Flash      string
 	Colour     string
-	Colours    []string
 
 	Sound     string
 	SoundHint string
@@ -58,14 +86,20 @@ type wording struct {
 	Preview   string
 	Volume    string
 
-	Speech        string
-	SpeechHint    string
-	SpeakCodex    string
-	SpeakOpenCode string
-	SpeechVoice   string
-	SpeechReplace string
-	SpeechBack    string
-	VoiceDefault  string
+	Speech              string
+	SpeechHint          string
+	Mode                string
+	SpeechModeSystem    string
+	SpeechModeRecording string
+	SpeechRecording     string
+	SpeechNoVoice       string
+	SpeakCodex          string
+	SpeakOpenCode       string
+	SpeechVoice         string
+	SpeechReplace       string
+	SpeechBack          string
+	VoiceDefault        string
+	Recordings          []string
 
 	Integrations  string
 	CodexTitle    string
@@ -128,13 +162,17 @@ var chinese = wording{
 	LastCue:    "最近一次唤醒 %s%s，共 %d 次",
 	FromSource: "（%s）",
 
-	General:     "通用",
-	Master:      "启用提示",
-	MasterHint:  "关闭后既不发光也不发声",
-	Language:    "语言",
-	LangSystem:  "跟随系统",
-	LangChinese: "中文",
-	LangEnglish: "English",
+	General:       "通用",
+	GeneralHint:   "管理运行偏好，以及 Codex 和 OpenCode 的连接。",
+	SettingsTitle: "CueDex 设置",
+	Master:        "启用提示",
+	MasterHint:    "关闭后既无光效也不发声",
+	Language:      "语言",
+	LangSystem:    "跟随系统",
+	LangChinese:   "中文",
+	LangEnglish:   "English",
+	TabCues:       "提醒",
+	TabAbout:      "关于",
 
 	Pause:      "暂停",
 	Pause15:    "15 分钟",
@@ -146,42 +184,72 @@ var chinese = wording{
 
 	QuietTitle: "免打扰",
 	QuietHint:  "这段时间内不提示；起止相同表示全天",
-	QuietFrom:  "从",
-	QuietTo:    "到",
+	QuietFrom:  "开始",
+	QuietTo:    "结束",
 
-	Autostart:     "开机时启动",
+	Autostart:     "登录时启动",
 	AutostartHint: "登录后静默运行，只出现在托盘",
+
+	Product:      "CueDex",
+	AboutVersion: "版本 %s",
+	AboutDev:     "开发版",
+	AboutTagline: "当 Codex 或 OpenCode 完成回复时，CueDex 会通过屏幕边缘光效、提示音或语音提醒你。",
+
+	Sources:              "提醒来源",
+	CueFor:               "%s 提示",
+	CueHint:              "主会话回复完成时，使用此来源的提示设置。",
+	Glow:                 "光效",
+	SoundPane:            "声音",
+	NotificationSound:    "通知音",
+	EnableGlow:           "是否启用",
+	GlowHint:             "在屏幕边缘显示 3 秒光效。",
+	Colour:               "颜色",
+	MainColour:           "主色",
+	SecondaryColourLabel: "副色",
+	FlashHint:            "两种颜色交替闪烁，持续 3 秒。",
+	TestGlow:             "测试光效",
+	EnableSound:          "是否启用",
+	TestSound:            "测试声音",
+	TestSpeech:           "测试语音",
+	SpeechEnable:         "是否启用",
+	SpeechText:           "通知文字",
+	SpeechTextLabel:      "通知文字",
+	PreviewNote:          "测试仅预览当前来源的效果，不代表接入已验证。",
 
 	Appearance: "外观",
 	SourceOn:   "显示该来源的提示",
-	Animation:  "动画",
-	Breathing:  "呼吸",
-	Flash:      "交替闪烁",
-	Colour:     "颜色",
-	Colours:    []string{"青绿", "紫罗兰", "蓝", "粉", "琥珀", "绿", "珊瑚", "灰"},
+	Effect:     "光效模式",
+	Breathing:  "单色呼吸",
+	Flash:      "双色交替闪烁",
 
-	Sound:     "提示音",
-	SoundHint: "每条提示最多响一次；音量 0 等同静音，不影响发光",
+	Sound:     "声音",
+	SoundHint: "每条提示最多响一次；音量 0 等同静音，不影响光效",
 	Sounds:    []string{"上扬", "下沉", "清音", "双击"},
 	Preview:   "试听",
 	Volume:    "音量",
 
-	Speech:        "语音播报",
-	SpeechHint:    "只说固定短语（Codex 已完成 / OpenCode 已完成），不朗读任何回复内容",
-	SpeakCodex:    "朗读 Codex",
-	SpeakOpenCode: "朗读 OpenCode",
-	SpeechVoice:   "声音",
-	SpeechReplace: "用语音替代提示音",
-	SpeechBack:    "没有可用语音时自动回到提示音",
-	VoiceDefault:  "系统默认",
+	Speech:              "语音",
+	SpeechHint:          "播放预录语音，或朗读你为这个来源设置的短语；只播放固定内容，不读取任何回复",
+	Mode:                "模式",
+	SpeechModeSystem:    "系统朗读",
+	SpeechModeRecording: "预录语音",
+	SpeechRecording:     "录音",
+	SpeechNoVoice:       "没有可用的系统语音；可以改用预录语音。",
+	SpeakCodex:          "朗读 Codex",
+	SpeakOpenCode:       "朗读 OpenCode",
+	SpeechVoice:         "说话人",
+	SpeechReplace:       "用语音替代提示音",
+	SpeechBack:          "没有可用语音时自动回到提示音",
+	VoiceDefault:        "系统默认",
+	Recordings:          []string{"消息提醒（男声）", "消息提醒（女声）", "查看消息（男声）", "查看消息（女声）"},
 
 	Integrations:  "集成",
 	CodexTitle:    "Codex 集成",
 	OpenCodeTitle: "OpenCode 集成",
-	EnableCodex:   "启用 Codex 集成",
-	DisableCodex:  "停用 Codex 集成",
-	EnableOpen:    "启用 OpenCode 集成",
-	DisableOpen:   "停用 OpenCode 集成",
+	EnableCodex:   "启用集成",
+	DisableCodex:  "停用集成",
+	EnableOpen:    "启用集成",
+	DisableOpen:   "停用集成",
 
 	Diagnostics:              "诊断",
 	DiagHint:                 "只显示状态与时间，不读取、不记录会话内容",
@@ -200,7 +268,7 @@ var chinese = wording{
 	DiagNoEvent:              "最近一次事件：还没有收到",
 
 	Close:        "关闭",
-	PauseCues:    "暂停提示",
+	PauseCues:    "暂停通知",
 	OpenSettings: "打开设置",
 	Quit:         "退出",
 
@@ -236,13 +304,17 @@ var english = wording{
 	LastCue:    "Last cue at %s%s, %d in total",
 	FromSource: " (%s)",
 
-	General:     "General",
-	Master:      "Cue on completion",
-	MasterHint:  "Off means no glow and no sound",
-	Language:    "Language",
-	LangSystem:  "Follow Windows",
-	LangChinese: "中文",
-	LangEnglish: "English",
+	General:       "General",
+	GeneralHint:   "Runtime preferences and the Codex and OpenCode connections.",
+	SettingsTitle: "CueDex Settings",
+	Master:        "Cue on completion",
+	MasterHint:    "Off means no glow and no sound",
+	Language:      "Language",
+	LangSystem:    "Follow Windows",
+	LangChinese:   "中文",
+	LangEnglish:   "English",
+	TabCues:       "Cues",
+	TabAbout:      "About",
 
 	Pause:      "Pause",
 	Pause15:    "15 minutes",
@@ -255,41 +327,71 @@ var english = wording{
 	QuietTitle: "Quiet hours",
 	QuietHint:  "Nothing cues inside this window; equal ends mean all day",
 	QuietFrom:  "From",
-	QuietTo:    "To",
+	QuietTo:    "Until",
 
-	Autostart:     "Start with Windows",
+	Autostart:     "Launch at login",
 	AutostartHint: "Runs quietly after sign-in, tray only",
+
+	Product:      "CueDex",
+	AboutVersion: "Version %s",
+	AboutDev:     "Development build",
+	AboutTagline: "CueDex routes Codex and OpenCode completion events to screen-edge glow, sound, or speech.",
+
+	Sources:              "Attention Source",
+	CueFor:               "%s cues",
+	CueHint:              "Used when a main turn for this provider finishes.",
+	Glow:                 "Glow",
+	SoundPane:            "Sound",
+	NotificationSound:    "Notification Sound",
+	EnableGlow:           "Enabled",
+	GlowHint:             "Draws a 3-second glow around the screen edge.",
+	Colour:               "Color",
+	MainColour:           "Primary Color",
+	SecondaryColourLabel: "Secondary Color",
+	FlashHint:            "The two colours alternate for 3 seconds.",
+	TestGlow:             "Test Glow",
+	EnableSound:          "Enabled",
+	TestSound:            "Test Sound",
+	TestSpeech:           "Test speech",
+	SpeechEnable:         "Enabled",
+	SpeechText:           "Message",
+	SpeechTextLabel:      "Message",
+	PreviewNote:          "Tests preview this source's effects only; they do not verify integration.",
 
 	Appearance: "Appearance",
 	SourceOn:   "Cue for this provider",
-	Animation:  "Animation",
-	Breathing:  "Breathing",
-	Flash:      "Alternating flash",
-	Colour:     "Colour",
-	Colours:    []string{"Teal", "Violet", "Blue", "Pink", "Amber", "Green", "Coral", "Slate"},
+	Effect:     "Effect",
+	Breathing:  "Monochrome Breathing",
+	Flash:      "Two-Color Flash",
 
-	Sound:     "Cue sound",
+	Sound:     "Sound",
 	SoundHint: "Plays once per cue; volume 0 is silent and leaves the glow alone",
 	Sounds:    []string{"Rise", "Fall", "Chime", "Knock"},
 	Preview:   "Preview",
 	Volume:    "Volume",
 
-	Speech:        "Spoken announcement",
-	SpeechHint:    `Only a fixed phrase ("Codex is done" / "OpenCode is done"); no reply text is ever read`,
-	SpeakCodex:    "Speak for Codex",
-	SpeakOpenCode: "Speak for OpenCode",
-	SpeechVoice:   "Voice",
-	SpeechReplace: "Speak instead of the sound",
-	SpeechBack:    "Falls back to the sound when no voice is installed",
-	VoiceDefault:  "System default",
+	Speech:              "Speech",
+	SpeechHint:          "Plays a bundled clip, or reads the phrase you set for this provider; only fixed text is ever played",
+	Mode:                "Mode",
+	SpeechModeSystem:    "System Speech",
+	SpeechModeRecording: "Recorded",
+	SpeechRecording:     "Recording",
+	SpeechNoVoice:       "No system voice is installed; a recorded announcement still works.",
+	SpeakCodex:          "Speak for Codex",
+	SpeakOpenCode:       "Speak for OpenCode",
+	SpeechVoice:         "Voice",
+	SpeechReplace:       "Speak instead of the sound",
+	SpeechBack:          "Falls back to the sound when no voice is installed",
+	VoiceDefault:        "System default",
+	Recordings:          []string{"Message Reminder (Male)", "Message Reminder (Female)", "Check Your Messages (Male)", "Check Your Messages (Female)"},
 
 	Integrations:  "Integrations",
 	CodexTitle:    "Codex integration",
 	OpenCodeTitle: "OpenCode integration",
-	EnableCodex:   "Enable Codex integration",
-	DisableCodex:  "Disable Codex integration",
-	EnableOpen:    "Enable OpenCode integration",
-	DisableOpen:   "Disable OpenCode integration",
+	EnableCodex:   "Enable Integration",
+	DisableCodex:  "Disable Integration",
+	EnableOpen:    "Enable Integration",
+	DisableOpen:   "Disable Integration",
 
 	Diagnostics:              "Diagnostics",
 	DiagHint:                 "State and times only; the conversation is never read or recorded",
@@ -308,7 +410,7 @@ var english = wording{
 	DiagNoEvent:              "Latest event: none received yet",
 
 	Close:        "Close",
-	PauseCues:    "Pause cues",
+	PauseCues:    "Pause Notifications",
 	OpenSettings: "Open settings",
 	Quit:         "Quit",
 
@@ -353,20 +455,6 @@ func (t wording) lastCue(at time.Time, source string, count int) string {
 	return fmt.Sprintf(t.LastCue, at.Format("15:04:05"), from, count)
 }
 
-// colourLabels names each palette entry, in the palette's order.
-func (t wording) colourLabels() []string {
-	if len(t.Colours) == len(prefs.Palette) {
-		return t.Colours
-	}
-	labels := make([]string, len(prefs.Palette))
-	for i := range labels {
-		if i < len(t.Colours) {
-			labels[i] = t.Colours[i]
-		}
-	}
-	return labels
-}
-
 // soundLabels names the bundled sounds in the order sound.All returns them.
 func (t wording) soundLabels() []string {
 	all := sound.All()
@@ -377,6 +465,22 @@ func (t wording) soundLabels() []string {
 	for i := range labels {
 		if i < len(t.Sounds) {
 			labels[i] = t.Sounds[i]
+		}
+	}
+	return labels
+}
+
+// recordingLabels names the bundled clips in the order recordings.All returns
+// them.
+func (t wording) recordingLabels() []string {
+	all := recordings.All()
+	if len(t.Recordings) == len(all) {
+		return t.Recordings
+	}
+	labels := make([]string, len(all))
+	for i := range labels {
+		if i < len(t.Recordings) {
+			labels[i] = t.Recordings[i]
 		}
 	}
 	return labels

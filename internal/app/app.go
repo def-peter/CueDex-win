@@ -5,6 +5,7 @@ package app
 import (
 	_ "embed"
 	"errors"
+	"fmt"
 	"log"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/def-peter/cuedex-win/internal/paths"
 	"github.com/def-peter/cuedex-win/internal/playback"
 	"github.com/def-peter/cuedex-win/internal/prefs"
+	"github.com/def-peter/cuedex-win/internal/recordings"
 	"github.com/def-peter/cuedex-win/internal/sound"
 	"github.com/def-peter/cuedex-win/internal/speech"
 )
@@ -39,6 +41,13 @@ type speaker interface {
 	Close()
 }
 
+// clipPlayer plays a bundled voice clip. It is a separate stream from audio,
+// so the announcement and the cue sound can be heard together, as on the mac.
+type clipPlayer interface {
+	PlayBytes(data []byte, volume int) error
+	Stop()
+}
+
 // App owns the tray icon, the settings panel, and everything the panels show.
 // Its state is read and changed on the main thread only.
 type App struct {
@@ -50,6 +59,7 @@ type App struct {
 	watch    *events.Watcher
 	player   *playback.Player
 	audio    audio
+	clips    clipPlayer
 	speech   speaker
 	codex    integrations.CodexIntegration
 	opencode integrations.OpenCodeIntegration
@@ -71,6 +81,14 @@ type App struct {
 	voicesLoaded  bool
 	loadingVoices bool
 	state         settings
+	// previewing is true while previewGlow's overlay is on screen, and the
+	// serial invalidates a timer that outlived a newer preview. The speech
+	// serial does the same for the timer that stops a preview phrase.
+	previewing          bool
+	previewTimer        *time.Timer
+	previewSerial       uint64
+	speechPreviewTimer  *time.Timer
+	speechPreviewSerial uint64
 }
 
 // New returns an app that keeps its files in dir and installs hooks that run
@@ -109,6 +127,7 @@ func New(dir paths.Dir, exe string) *App {
 			Exe:       exe,
 		},
 		audio:     &sound.Player{},
+		clips:     &sound.Recorder{},
 		speech:    speech.New(),
 		prefs:     stored,
 		prefsPath: dir.Preferences(),
@@ -133,6 +152,8 @@ func New(dir paths.Dir, exe string) *App {
 	a.state.onToggleOpenCode = a.toggleOpenCode
 	a.state.onChangeSound = a.changeSound
 	a.state.onPreviewSound = a.previewSound
+	a.state.onPreviewGlow = a.previewGlow
+	a.state.onPreviewSpeech = a.previewSpeech
 	a.state.onChangeSpeech = a.changeSpeech
 	a.state.onToggleEnabled = a.changeGeneral
 	a.state.onChangeLanguage = a.changeLanguage
@@ -221,6 +242,9 @@ func (a *App) Ready() {
 		}
 		a.audio.Stop()
 		a.speech.Close()
+		if a.clips != nil {
+			a.clips.Stop()
+		}
 		if a.saveTimer != nil {
 			a.saveTimer.Stop()
 			a.saveTimer = nil
@@ -229,6 +253,8 @@ func (a *App) Ready() {
 			a.pauseTimer.Stop()
 			a.pauseTimer = nil
 		}
+		a.stopPreviewGlow()
+		a.stopSpeechPreview()
 		a.savePrefs()
 		if a.tray != nil {
 			a.tray.Destroy()
@@ -262,31 +288,20 @@ func (a *App) rebuildTray() {
 	}
 }
 
-// newWindow builds the settings panel. A MyGo window costs about 80 MB
-// whether or not it is visible, so the panel exists only while the user has
-// it open: the app sits near the bare event loop otherwise.
+// newWindow builds the settings window. It is a normal window that stays open
+// while the user works in another app; closing it destroys it and returns the
+// ~80 MB a MyGo window holds, so the app sits near the bare event loop again.
 func (a *App) newWindow() *mygo.Window {
 	w := mygo.NewWindow(mygo.WindowOptions{
-		Title:             "CueDex",
-		Width:             420,
-		Height:            790,
-		Frameless:         true,
-		DisableResize:     true,
-		DisableMinimize:   true,
-		DisableMaximize:   true,
-		DisableFullScreen: true,
-		AlwaysOnTop:       true,
-		SkipTaskbar:       true,
-		Content:           ui.View(a.state.view),
+		Title:         a.state.text().SettingsTitle,
+		Width:         720,
+		Height:        640,
+		DisableResize: true,
+		Content:       ui.View(a.state.view),
 	})
 	if err := w.SetIcon(trayIcon()); err != nil {
 		log.Printf("cuedex: window icon: %v", err)
 	}
-	// Losing focus closes the panel, as a tray popover does, and gives its
-	// memory back.
-	w.OnBlur(func() {
-		w.Close()
-	})
 	w.OnClosed(func() {
 		if a.win == w {
 			a.win = nil
@@ -303,6 +318,12 @@ func (a *App) Cue() { a.watch.Nudge() }
 // cueStart draws one cue and records it. The player calls it on the main
 // thread, once per cue, never while another one is running.
 func (a *App) cueStart(source events.Source) {
+	// A real cue takes the screen and the voice from a preview rather than
+	// stacking with it.
+	a.stopPreviewGlow()
+	if a.stopSpeechPreview() {
+		a.stopAnnouncement()
+	}
 	a.state.cueCount++
 	a.state.lastCue = time.Now()
 	a.state.lastSource = source
@@ -311,10 +332,7 @@ func (a *App) cueStart(source events.Source) {
 	}
 	spoken := a.speechWanted(source)
 	if spoken {
-		if err := a.speech.Speak(a.prefs.Speech.Voice, speech.Phrase(source)); err != nil {
-			log.Printf("cuedex: speech: %v", err)
-			a.state.speechProblem = newProblem(speechProblem, err.Error())
-		}
+		a.announce(source)
 	}
 	// Speech replaces the sound only when the user asked for that and a voice
 	// is actually installed; a machine without voices always keeps the chime.
@@ -328,12 +346,60 @@ func (a *App) cueStart(source events.Source) {
 
 // speechWanted says whether this completion should be announced. A machine
 // with no installed voice never tries, so a half-configured preference cannot
-// leave a cue silent.
+// leave a cue silent. A bundled clip needs no voice and is always there.
 func (a *App) speechWanted(source events.Source) bool {
-	if a.speech == nil || !a.prefs.Speech.On(source) {
+	if !a.prefs.Speech.On(source) {
+		return false
+	}
+	if a.prefs.Speech.Mode(source) == prefs.SpeechRecording {
+		return a.clips != nil
+	}
+	if a.speech == nil {
 		return false
 	}
 	return !a.voicesLoaded || len(a.voices) > 0
+}
+
+// announce says the producer's phrase: a bundled clip, or the stored phrase
+// read by a SAPI voice. Neither ever carries anything from an event.
+func (a *App) announce(source events.Source) {
+	if a.prefs.Speech.Mode(source) == prefs.SpeechRecording {
+		if err := a.playClip(source); err != nil {
+			log.Printf("cuedex: speech: %v", err)
+			a.state.speechProblem = newProblem(speechProblem, err.Error())
+		}
+		return
+	}
+	if a.speech == nil {
+		return
+	}
+	if err := a.speech.Speak(a.prefs.Speech.Voice, a.speechText(source)); err != nil {
+		log.Printf("cuedex: speech: %v", err)
+		a.state.speechProblem = newProblem(speechProblem, err.Error())
+	}
+}
+
+// clipVolume is how loud a bundled clip plays: the clip is the announcement,
+// not the chime, and the system mixer sets the level the user actually hears.
+const clipVolume = 100
+
+// playClip plays the clip the producer's preferences name.
+func (a *App) playClip(source events.Source) error {
+	if a.clips == nil {
+		return nil
+	}
+	recording, ok := recordings.Lookup(a.prefs.Speech.Recording(source))
+	if !ok {
+		recording, _ = recordings.Lookup(recordings.DefaultID)
+	}
+	data, err := recording.Bytes()
+	if err != nil {
+		return fmt.Errorf("recording %s: %w", recording.ID, err)
+	}
+	if err := a.clips.PlayBytes(data, clipVolume); err != nil {
+		return fmt.Errorf("recording %s: %w", recording.ID, err)
+	}
+	return nil
 }
 
 // playSound plays the producer's bundled cue sound.
@@ -350,14 +416,24 @@ func (a *App) playSound(source events.Source) {
 
 // cueStop takes a cue off the screen when the user pauses.
 func (a *App) cueStop() {
+	a.stopPreviewGlow()
+	a.stopSpeechPreview()
 	if a.overlay != nil {
 		a.overlay.Hide()
 	}
 	if a.audio != nil {
 		a.audio.Stop()
 	}
+	a.stopAnnouncement()
+}
+
+// stopAnnouncement silences a phrase, whether it came from SAPI or a clip.
+func (a *App) stopAnnouncement() {
 	if a.speech != nil {
 		a.speech.Stop()
+	}
+	if a.clips != nil {
+		a.clips.Stop()
 	}
 }
 
@@ -394,9 +470,11 @@ func (a *App) changeLanguage() {
 	a.state.languageSetting = a.state.languageSettingFor(a.state.languageLabel)
 	a.state.language = i18n.Resolve(a.state.languageSetting)
 	a.state.languageLabel = a.state.languageLabelFor(a.state.languageSetting)
-	// The colour picker and the voice picker hold labels, not values, so they
-	// are refilled in the new language.
+	// The voice pickers hold labels, not values, so they are refilled in the
+	// new language. The colours are refilled too, which is harmless and keeps
+	// this one path for both blocks.
 	a.state.applyDisplay(a.prefs)
+	a.state.applySound(a.prefs)
 	a.state.applySpeech(a.prefs)
 	a.prefs = a.prefs.SetGeneral(a.state.general(time.Now()))
 	a.rebuildTray()
@@ -543,6 +621,115 @@ func (a *App) previewSound(source events.Source) {
 	a.invalidate()
 }
 
+// speechText is what a completion says: the phrase the user stored for the
+// producer, or the built-in one when it is empty. No event content reaches it.
+func (a *App) speechText(source events.Source) string {
+	if text := a.prefs.Speech.Text(source); text != "" {
+		return text
+	}
+	return speech.Phrase(source)
+}
+
+// previewGlow shows the selected producer's cue without counting it. It stays
+// out of the way of a real cue, and a second press while one preview runs is
+// ignored rather than stacking timers.
+func (a *App) previewGlow(source events.Source) {
+	if a.overlay == nil || a.previewing {
+		return
+	}
+	if a.player != nil && a.player.Playing() {
+		return
+	}
+	a.previewing = true
+	a.previewSerial++
+	serial := a.previewSerial
+	a.overlay.Show(a.sourceCue(source))
+	a.previewTimer = time.AfterFunc(playback.Duration, func() {
+		mygo.RunOnMain(func() {
+			if a.previewSerial != serial {
+				return
+			}
+			a.previewTimer = nil
+			a.previewing = false
+			if a.overlay != nil {
+				a.overlay.Hide()
+			}
+		})
+	})
+}
+
+// stopPreviewGlow cancels a preview without hiding the overlay: a real cue is
+// about to draw over it, or the player is hiding it itself.
+func (a *App) stopPreviewGlow() {
+	a.previewSerial++
+	if a.previewTimer != nil {
+		a.previewTimer.Stop()
+		a.previewTimer = nil
+	}
+	a.previewing = false
+}
+
+// previewSpeech plays the selected producer's announcement: a bundled clip, or
+// the phrase through the chosen SAPI voice. Playback is asynchronous, so the UI
+// thread never waits on it, and a timer stops a phrase that would otherwise
+// keep talking.
+func (a *App) previewSpeech(source events.Source) {
+	if a.prefs.Speech.Mode(source) == prefs.SpeechRecording {
+		if err := a.playClip(source); err != nil {
+			log.Printf("cuedex: speech: %v", err)
+			a.state.speechProblem = newProblem(speechProblem, err.Error())
+			a.invalidate()
+			return
+		}
+		a.state.speechProblem = problem{}
+		a.scheduleSpeechPreviewStop()
+		a.invalidate()
+		return
+	}
+	if a.speech == nil {
+		return
+	}
+	if err := a.speech.Speak(a.prefs.Speech.Voice, a.speechText(source)); err != nil {
+		log.Printf("cuedex: speech: %v", err)
+		a.state.speechProblem = newProblem(speechProblem, err.Error())
+		a.invalidate()
+		return
+	}
+	a.state.speechProblem = problem{}
+	a.scheduleSpeechPreviewStop()
+	a.invalidate()
+}
+
+// scheduleSpeechPreviewStop ends a preview phrase after a cue's own length.
+func (a *App) scheduleSpeechPreviewStop() {
+	a.speechPreviewSerial++
+	serial := a.speechPreviewSerial
+	if a.speechPreviewTimer != nil {
+		a.speechPreviewTimer.Stop()
+	}
+	a.speechPreviewTimer = time.AfterFunc(playback.Duration, func() {
+		mygo.RunOnMain(func() {
+			if a.speechPreviewSerial != serial {
+				return
+			}
+			a.speechPreviewTimer = nil
+			a.stopAnnouncement()
+		})
+	})
+}
+
+// stopSpeechPreview cancels the preview's stop timer and reports whether one
+// was still running.
+func (a *App) stopSpeechPreview() bool {
+	active := a.speechPreviewTimer != nil
+	a.speechPreviewSerial++
+	if a.speechPreviewTimer != nil {
+		a.speechPreviewTimer.Stop()
+		a.speechPreviewTimer = nil
+	}
+	return active
+}
+
 // savePrefs writes the choices out. A failure is shown in the panel rather than
 // ending the app: cueing still works from memory.
 func (a *App) savePrefs() {
@@ -582,6 +769,8 @@ func (a *App) show() {
 // and what the tray's first item does.
 func (a *App) Open() { a.show() }
 
+// hide closes the settings window, which destroys it and gives its memory
+// back. Ctrl+W asks for it; the window's own close button does the same.
 func (a *App) hide() {
 	if a.win != nil {
 		a.win.Close()
@@ -683,14 +872,14 @@ func (a *App) invalidate() {
 	}
 }
 
-// sourceCue is each producer's presentation, as the panel last stored it: the
-// colour the user picked, the animation, and a second colour derived from the
-// first so the flash never clashes.
+// sourceCue is each producer's appearance, as the panel last stored it: the
+// effect, and the colour or pair that effect draws with.
 func (a *App) sourceCue(source events.Source) overlay.Cue {
 	display := a.prefs.Display.For(source)
+	primary, secondary := display.Cue()
 	return overlay.Cue{
-		Primary:   display.Colour(),
-		Secondary: display.Secondary(),
+		Primary:   primary,
+		Secondary: secondary,
 		Animation: display.Animation,
 	}
 }

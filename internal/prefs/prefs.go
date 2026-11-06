@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/def-peter/cuedex-win/internal/events"
+	"github.com/def-peter/cuedex-win/internal/recordings"
 	"github.com/def-peter/cuedex-win/internal/sound"
 )
 
@@ -31,8 +32,11 @@ type Preferences struct {
 	Speech  SpeechPreferences `json:"speech"`
 }
 
-// Version is what this build writes into the file.
-const Version = 2
+// Version is what this build writes into the file. Version 2 is the first that
+// has the general and display blocks; 3 is the first whose default glow colour
+// is the product blue. A file without a version was written by the first
+// build, whose missing blocks take defaults.
+const Version = 5
 
 // SoundPreferences is the cue sound per producer. Each producer has its own, so
 // the two are told apart by ear as well as by colour.
@@ -48,17 +52,111 @@ type SoundChoice struct {
 	Volume int    `json:"volume"`
 }
 
-// SpeechPreferences is the spoken announcement. The text is not stored: it is
-// a constant per producer, so no file can make the app read a reply aloud.
+// SpeechPreferences is the spoken announcement. Only this text is ever spoken:
+// it is the user's own fixed phrase per producer, never a reply, a prompt or
+// anything read from an event.
 type SpeechPreferences struct {
 	// Voice is the SAPI token id; empty means the system default.
 	Voice string `json:"voice"`
 	// Codex and OpenCode say whether that producer is announced.
 	Codex    bool `json:"codex"`
 	OpenCode bool `json:"opencode"`
+	// CodexMode and OpenCodeMode say how each producer is announced; an
+	// empty one is the system voice, which is what a file written before
+	// the bundled clips existed means.
+	CodexMode    SpeechMode `json:"codexMode,omitempty"`
+	OpenCodeMode SpeechMode `json:"opencodeMode,omitempty"`
+	// CodexRecording and OpenCodeRecording name the bundled clip played in
+	// recording mode. An empty one is the default clip.
+	CodexRecording    string `json:"codexRecording,omitempty"`
+	OpenCodeRecording string `json:"opencodeRecording,omitempty"`
 	// ReplaceSound silences the cue sound when a phrase is spoken. Speech is
 	// additive by default, so a voice that fails never leaves a cue silent.
 	ReplaceSound bool `json:"replaceSound"`
+	// CodexText and OpenCodeText are the phrases spoken for each producer. An
+	// empty one speaks the built-in phrase.
+	CodexText    string `json:"codexText,omitempty"`
+	OpenCodeText string `json:"opencodeText,omitempty"`
+}
+
+// SpeechMode is how a producer is announced: read aloud by an installed SAPI
+// voice, or played as one of the bundled clips. A machine with no SAPI voice
+// can still be announced with a clip.
+type SpeechMode string
+
+const (
+	// SpeechSystem reads the stored phrase with a SAPI voice.
+	SpeechSystem SpeechMode = "system"
+	// SpeechRecording plays a clip that ships with the app.
+	SpeechRecording SpeechMode = "recording"
+)
+
+// Mode is how a producer is announced. An empty or unknown value is the
+// system voice, so a file written by an older build reads as it always did.
+func (s SpeechPreferences) Mode(source events.Source) SpeechMode {
+	mode := s.CodexMode
+	if source == events.OpenCode {
+		mode = s.OpenCodeMode
+	}
+	if mode == SpeechRecording {
+		return SpeechRecording
+	}
+	return SpeechSystem
+}
+
+// SetMode replaces one producer's announcement mode and returns the result.
+func (s SpeechPreferences) SetMode(source events.Source, mode SpeechMode) SpeechPreferences {
+	if source == events.OpenCode {
+		s.OpenCodeMode = mode
+	} else {
+		s.CodexMode = mode
+	}
+	return s
+}
+
+// Recording is the bundled clip a producer plays in recording mode. An empty
+// or unknown value is the default clip, so the choice is always playable.
+func (s SpeechPreferences) Recording(source events.Source) string {
+	id := s.CodexRecording
+	if source == events.OpenCode {
+		id = s.OpenCodeRecording
+	}
+	if _, ok := recordings.Lookup(id); ok {
+		return id
+	}
+	return recordings.DefaultID
+}
+
+// SetRecording replaces one producer's clip and returns the result.
+func (s SpeechPreferences) SetRecording(source events.Source, id string) SpeechPreferences {
+	if source == events.OpenCode {
+		s.OpenCodeRecording = id
+	} else {
+		s.CodexRecording = id
+	}
+	return s
+}
+
+// MaxText is how long a spoken phrase may be, in runes. A cue says one short
+// sentence; anything longer is a paste, not an announcement.
+const MaxText = 120
+
+// Text is the phrase spoken for a producer, or "" to speak the built-in one.
+func (s SpeechPreferences) Text(source events.Source) string {
+	if source == events.OpenCode {
+		return s.OpenCodeText
+	}
+	return s.CodexText
+}
+
+// SetText replaces one producer's phrase and returns the result.
+func (s SpeechPreferences) SetText(source events.Source, text string) SpeechPreferences {
+	if source == events.OpenCode {
+		s.OpenCodeText = text
+	} else {
+		s.CodexText = text
+	}
+	return s
 }
 
 // On reports whether a producer is announced.
@@ -159,7 +257,43 @@ func (p Preferences) Normalized() Preferences {
 	p.Sound.Codex = normalizeChoice(p.Sound.Codex, defaults.Sound.Codex)
 	p.Sound.OpenCode = normalizeChoice(p.Sound.OpenCode, defaults.Sound.OpenCode)
 	p.Speech.Voice = strings.TrimSpace(p.Speech.Voice)
+	p.Speech.CodexText = normalizeText(p.Speech.CodexText)
+	p.Speech.OpenCodeText = normalizeText(p.Speech.OpenCodeText)
+	p.Speech.CodexMode = normalizeMode(p.Speech.CodexMode)
+	p.Speech.OpenCodeMode = normalizeMode(p.Speech.OpenCodeMode)
+	p.Speech.CodexRecording = normalizeRecording(p.Speech.CodexRecording)
+	p.Speech.OpenCodeRecording = normalizeRecording(p.Speech.OpenCodeRecording)
 	return p
+}
+
+// normalizeMode keeps a mode this build knows and drops one it does not, so a
+// file from a newer build still opens and reads as the system voice.
+func normalizeMode(mode SpeechMode) SpeechMode {
+	switch mode {
+	case SpeechSystem, SpeechRecording:
+		return mode
+	}
+	return ""
+}
+
+// normalizeRecording keeps a clip this build bundles. A name from another
+// build is dropped, and Recording then falls back to the default clip.
+func normalizeRecording(id string) string {
+	if _, ok := recordings.Lookup(id); ok {
+		return id
+	}
+	return ""
+}
+
+// normalizeText trims a phrase and cuts it to MaxText runes, so a pasted
+// paragraph cannot become a minute of speech from a single cue.
+func normalizeText(text string) string {
+	text = strings.TrimSpace(text)
+	runes := []rune(text)
+	if len(runes) <= MaxText {
+		return text
+	}
+	return strings.TrimSpace(string(runes[:MaxText]))
 }
 
 func normalizeChoice(choice, fallback SoundChoice) SoundChoice {
@@ -201,7 +335,48 @@ func Load(path string) (Preferences, error) {
 		stored.General = defaults.General
 		stored.Display = defaults.Display
 	}
+	// Version 3 made the product blue the default glow. A file from before it
+	// carries the teal and violet that version 2 wrote for a fresh install,
+	// which were never a choice, so the upgrade moves them to the new default.
+	if stored.Version > 0 && stored.Version < 3 {
+		stored.Display.Codex = replaceOldDefault(stored.Display.Codex, "#5EEAD4")
+		stored.Display.OpenCode = replaceOldDefault(stored.Display.OpenCode, "#A78BFA")
+	}
+	// Version 4 gave 双色交替闪烁 a pair of its own, stored apart from the
+	// single colour 单色呼吸 uses. A file from before it carries one colour for
+	// both effects, and possibly the violet version 3 derived as a partner;
+	// the pair starts from the defaults instead.
+	if stored.Version > 0 && stored.Version < 4 {
+		stored.Display.Codex.Primary, stored.Display.Codex.Secondary = "", ""
+		stored.Display.OpenCode.Primary, stored.Display.OpenCode.Secondary = "", ""
+	}
+	// Version 5 reads the flash the other way round: the product blue is the
+	// main colour and the red is the accent it alternates with. Only that exact
+	// pair moves; a pair the user chose stays.
+	if stored.Version > 0 && stored.Version < 5 {
+		stored.Display.Codex = swapOldFlashPair(stored.Display.Codex)
+		stored.Display.OpenCode = swapOldFlashPair(stored.Display.OpenCode)
+	}
 	return stored.Normalized(), nil
+}
+
+// swapOldFlashPair moves the pair version 4 wrote for a fresh install to the
+// one this build ships: the blue first, the red second.
+func swapOldFlashPair(d DisplayPreferences) DisplayPreferences {
+	if d.Primary == "#FF141F" && d.Secondary == "#267AFF" {
+		d.Primary, d.Secondary = DefaultFlashPrimary, DefaultFlashSecondary
+	}
+	return d
+}
+
+// replaceOldDefault moves a colour that was the default of an older version to
+// the one the app now ships. Only that exact colour moves: any other value is
+// the user's own choice, even one that is close to it.
+func replaceOldDefault(d DisplayPreferences, old string) DisplayPreferences {
+	if d.Color == old {
+		d.Color = DefaultColour
+	}
+	return d
 }
 
 // Save writes the file, replacing whatever was there. The write goes through a

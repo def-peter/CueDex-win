@@ -192,3 +192,10 @@ func samplesOf(t *testing.T, wav []byte) []int16 {
 	}
 	return out
 }
+
+func TestRecorderRefusesAWavItCannotPlay(t *testing.T) {
+	var r Recorder
+	if err := r.PlayBytes([]byte("not a wav"), 70); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("error %v", err)
+	}
+}
