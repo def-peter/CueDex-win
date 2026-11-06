@@ -10,7 +10,7 @@ import (
 	_ "embed"
 )
 
-// The settings window's own look, from design/windows-settings: three tones
+// The settings window's own look: three tones
 // (page, source rail, card) so navigation, page and controls read as layers,
 // one hairline, one accent. The theme is replaced rather than tuned because
 // the stock one has a single surface for both the page and a control.
