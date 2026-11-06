@@ -348,6 +348,8 @@ mygo.WindowOptions{
 ## 9. 工程约定
 
 - `gofmt`、`go vet` 必须干净；提交前跑 `go test ./...`
+- 出包一律用 `go tool mygo build`：它会把图标和 manifest 写进 exe；裸 `go build`
+  的产物没有图标资源，资源管理器、开始菜单、固定的快捷方式会显示 Windows 的占位图标
 - 提交信息用 Conventional Commits
 - view 用 `ui.NewTester` 做无窗口测试，参考现有 `main_test.go`
 - 事件、偏好、播放编排这类纯逻辑要能脱离窗口测试

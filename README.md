@@ -53,6 +53,11 @@ go test ./...        # view tests run without a window
 go tool mygo build   # package the app into build\
 ```
 
+`go tool mygo build` writes the icon and manifest into the executable. A plain
+`go build` produces a binary with no icon resource, so Explorer, the Start menu
+and a pinned shortcut show the generic Windows placeholder instead of CueDex's
+bell; use the packaged build to check anything outside the running window.
+
 ## Scope
 
 Windows 11 only. macOS keeps its own repo and its own release pipeline.
