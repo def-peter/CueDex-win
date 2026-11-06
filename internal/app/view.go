@@ -701,7 +701,7 @@ func (s *settings) generalPage(c *ui.Context, p palette, t wording, now time.Tim
 			})
 		})
 		if s.paused && s.pauseRemaining > 0 {
-			p.footnote(c, fmt.Sprintf(t.PausedFor, shortDuration(s.pauseRemaining)))
+			p.footnote(c, fmt.Sprintf(t.PausedFor, t.shortDuration(s.pauseRemaining)))
 		}
 
 		ui.Box(c).Height(12)
@@ -799,11 +799,9 @@ func (s *settings) glowPane(c *ui.Context, p palette, t wording, source events.S
 			p.segmented(c, &display.animation, t.Effect, 300, false, changed,
 				t.Breathing, t.Flash).Disabled(!display.enabled)
 		})
-	})
-
-	ui.Box(c).Height(12)
-	p.group(c, t.Appearance, func() {
-		// 单色呼吸 is one colour; 双色交替闪烁 is a pair, and shows both.
+		// The colour is the effect's own, so it sits right under it rather
+		// than in a section of its own: 单色呼吸 takes one, 双色交替闪烁 two.
+		p.rule(c)
 		if flash {
 			p.row(c, t.MainColour, "", func() {
 				s.colourRow(c, p, &display.primary, t.MainColour, source,
@@ -822,7 +820,7 @@ func (s *settings) glowPane(c *ui.Context, p palette, t wording, source events.S
 		}
 	})
 
-	ui.Box(c).Height(12)
+	ui.Box(c).Height(16)
 	ui.Row(c).Children(func() {
 		// The button stands on the page, not in a row, so it sets its own
 		// height; otherwise it collapses to its text.
@@ -1050,14 +1048,14 @@ func (s *settings) openCodeDetail() string {
 }
 
 // shortDuration writes a pause's remainder in minutes, or hours and minutes
-// when it is long, so a countdown reads the same in both languages.
-func shortDuration(d time.Duration) string {
+// when it is long, in the panel's language.
+func (t wording) shortDuration(d time.Duration) string {
 	if d < time.Minute {
 		d = time.Minute
 	}
 	minutes := int(d / time.Minute)
 	if minutes < 60 {
-		return fmt.Sprintf("%d min", minutes)
+		return fmt.Sprintf(t.SlowMinutes, minutes)
 	}
-	return fmt.Sprintf("%d h %02d min", minutes/60, minutes%60)
+	return fmt.Sprintf(t.SlowHours, minutes/60, minutes%60)
 }

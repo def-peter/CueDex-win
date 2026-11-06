@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/def-peter/cuedex-win/internal/events"
 	"github.com/def-peter/cuedex-win/internal/i18n"
 	"github.com/def-peter/cuedex-win/internal/recordings"
 	"github.com/def-peter/cuedex-win/internal/sound"
@@ -56,11 +57,20 @@ type wording struct {
 	SpeechText           string
 	SpeechTextLabel      string
 
-	Appearance string
-	Effect     string
-	Breathing  string
-	Flash      string
-	Colour     string
+	Effect    string
+	Breathing string
+	Flash     string
+	Colour    string
+
+	// PhraseCodex and PhraseOpenCode are the built-in announcements, read by
+	// a system voice when the user has not written one.
+	PhraseCodex    string
+	PhraseOpenCode string
+
+	// SlowMinutes and SlowHours write a pause's remainder in the panel's own
+	// words: fmt takes one and two counts.
+	SlowMinutes string
+	SlowHours   string
 
 	Sound  string
 	Sounds []string
@@ -149,7 +159,7 @@ var chinese = wording{
 	SoundPane:            "声音",
 	NotificationSound:    "通知音",
 	EnableGlow:           "是否启用",
-	Colour:               "颜色",
+	Colour:               "光效颜色",
 	MainColour:           "主色",
 	SecondaryColourLabel: "副色",
 	TestGlow:             "测试光效",
@@ -160,10 +170,14 @@ var chinese = wording{
 	SpeechText:           "通知文字",
 	SpeechTextLabel:      "通知文字",
 
-	Appearance: "外观",
-	Effect:     "光效模式",
-	Breathing:  "单色呼吸",
-	Flash:      "双色交替闪烁",
+	PhraseCodex:    "Codex 已完成",
+	PhraseOpenCode: "OpenCode 已完成",
+	SlowMinutes:    "%d 分钟",
+	SlowHours:      "%d 小时 %d 分",
+
+	Effect:    "光效模式",
+	Breathing: "单色呼吸",
+	Flash:     "双色交替闪烁",
 
 	Sound:  "声音",
 	Sounds: []string{"上扬", "下沉", "清音", "双击"},
@@ -252,7 +266,7 @@ var english = wording{
 	SoundPane:            "Sound",
 	NotificationSound:    "Notification Sound",
 	EnableGlow:           "Enabled",
-	Colour:               "Color",
+	Colour:               "Glow Color",
 	MainColour:           "Primary Color",
 	SecondaryColourLabel: "Secondary Color",
 	TestGlow:             "Test Glow",
@@ -263,10 +277,14 @@ var english = wording{
 	SpeechText:           "Message",
 	SpeechTextLabel:      "Message",
 
-	Appearance: "Appearance",
-	Effect:     "Effect",
-	Breathing:  "Monochrome Breathing",
-	Flash:      "Two-Color Flash",
+	PhraseCodex:    "Codex has finished",
+	PhraseOpenCode: "OpenCode has finished",
+	SlowMinutes:    "%d min",
+	SlowHours:      "%d h %02d min",
+
+	Effect:    "Effect",
+	Breathing: "Breathing",
+	Flash:     "Two-Color Flash",
 
 	Sound:  "Sound",
 	Sounds: []string{"Rise", "Fall", "Chime", "Knock"},
@@ -324,6 +342,14 @@ func copyFor(language i18n.Language) wording {
 		return chinese
 	}
 	return english
+}
+
+// phrase is the built-in announcement for a producer, in this language.
+func (t wording) phrase(source events.Source) string {
+	if source == events.OpenCode {
+		return t.PhraseOpenCode
+	}
+	return t.PhraseCodex
 }
 
 // soundLabels names the bundled sounds in the order sound.All returns them.

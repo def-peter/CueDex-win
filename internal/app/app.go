@@ -620,7 +620,7 @@ func (a *App) speechText(source events.Source) string {
 	if text := a.prefs.Speech.Text(source); text != "" {
 		return text
 	}
-	return speech.Phrase(source)
+	return a.state.text().phrase(source)
 }
 
 // previewGlow shows the selected producer's cue without counting it. It stays

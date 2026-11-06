@@ -91,17 +91,18 @@ const (
 	SpeechRecording SpeechMode = "recording"
 )
 
-// Mode is how a producer is announced. An empty or unknown value is the
-// system voice, so a file written by an older build reads as it always did.
+// Mode is how a producer is announced. The bundled clip is the default, so an
+// empty or unknown value plays the clip: it needs no voice installed, and the
+// same machine sounds the same in either language.
 func (s SpeechPreferences) Mode(source events.Source) SpeechMode {
 	mode := s.CodexMode
 	if source == events.OpenCode {
 		mode = s.OpenCodeMode
 	}
-	if mode == SpeechRecording {
-		return SpeechRecording
+	if mode == SpeechSystem {
+		return SpeechSystem
 	}
-	return SpeechSystem
+	return SpeechRecording
 }
 
 // SetMode replaces one producer's announcement mode and returns the result.

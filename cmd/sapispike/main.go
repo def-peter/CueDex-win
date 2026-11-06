@@ -8,7 +8,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/def-peter/cuedex-win/internal/events"
 	"github.com/def-peter/cuedex-win/internal/speech"
 )
 
@@ -22,7 +21,8 @@ func main() {
 		fmt.Printf("  %s | %s | %s\n", v.ID, v.Name, v.Language)
 	}
 	if len(os.Args) > 1 && os.Args[1] == "speak" {
-		phrase := speech.Phrase(events.Codex)
+		// The app's own phrase, as the Chinese panel would say it.
+		phrase := "Codex 已完成"
 		fmt.Printf("speaking %q\n", phrase)
 		if err := engine.Speak("", phrase); err != nil {
 			fmt.Println("speak:", err)

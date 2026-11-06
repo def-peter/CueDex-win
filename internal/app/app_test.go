@@ -183,7 +183,7 @@ func TestRecordingModeNeedsNoInstalledVoice(t *testing.T) {
 	if !a.speechWanted(events.Codex) {
 		t.Fatal("a bundled clip was refused because no system voice is installed")
 	}
-	a.prefs = a.prefs.SetSpeech(prefs.SpeechPreferences{Codex: true})
+	a.prefs = a.prefs.SetSpeech(prefs.SpeechPreferences{Codex: true, CodexMode: prefs.SpeechSystem})
 	if a.speechWanted(events.Codex) {
 		t.Fatal("the system voice was used although none is installed")
 	}
@@ -275,7 +275,7 @@ func TestPreviewGlowCuesNothing(t *testing.T) {
 func TestPreviewSpeechUsesTheUsersPhrase(t *testing.T) {
 	speaker := &fakeSpeaker{}
 	a := &App{speech: speaker, prefs: prefs.Default()}
-	a.prefs = a.prefs.SetSpeech(prefs.SpeechPreferences{CodexText: "自定义短语"})
+	a.prefs = a.prefs.SetSpeech(prefs.SpeechPreferences{CodexMode: prefs.SpeechSystem, CodexText: "自定义短语"})
 
 	a.previewSpeech(events.Codex)
 	if len(speaker.said) != 1 || speaker.said[0] != "自定义短语" {
@@ -414,7 +414,7 @@ func TestCueSpeaksTheFixedPhrase(t *testing.T) {
 	speaker := &fakeSpeaker{voices: []speech.Voice{{ID: "voice", Name: "Voice", Language: "zh-CN"}}}
 	audio := &fakeAudio{}
 	a := &App{audio: audio, speech: speaker, prefs: prefs.Default(), voicesLoaded: true, voices: speaker.voices}
-	a.prefs = a.prefs.SetSpeech(prefs.SpeechPreferences{Voice: "voice", Codex: true})
+	a.prefs = a.prefs.SetSpeech(prefs.SpeechPreferences{Voice: "voice", Codex: true, CodexMode: prefs.SpeechSystem})
 	a.cueStart(events.Codex)
 
 	if len(speaker.said) != 1 || speaker.said[0] != "Codex 已完成" {
@@ -432,7 +432,7 @@ func TestCueSpeaksTheFixedPhrase(t *testing.T) {
 func TestCueSpeaksTheUsersPhrase(t *testing.T) {
 	speaker := &fakeSpeaker{voices: []speech.Voice{{ID: "voice", Name: "Voice", Language: "zh-CN"}}}
 	a := &App{audio: &fakeAudio{}, speech: speaker, prefs: prefs.Default(), voicesLoaded: true, voices: speaker.voices}
-	a.prefs = a.prefs.SetSpeech(prefs.SpeechPreferences{Voice: "voice", Codex: true, CodexText: "轮到你啦"})
+	a.prefs = a.prefs.SetSpeech(prefs.SpeechPreferences{Voice: "voice", Codex: true, CodexMode: prefs.SpeechSystem, CodexText: "轮到你啦"})
 	a.cueStart(events.Codex)
 
 	if len(speaker.said) != 1 || speaker.said[0] != "轮到你啦" {
@@ -444,7 +444,7 @@ func TestSpeechReplacesTheSoundOnlyWhenAsked(t *testing.T) {
 	speaker := &fakeSpeaker{voices: []speech.Voice{{ID: "voice", Name: "Voice"}}}
 	audio := &fakeAudio{}
 	a := &App{audio: audio, speech: speaker, prefs: prefs.Default(), voicesLoaded: true, voices: speaker.voices}
-	a.prefs = a.prefs.SetSpeech(prefs.SpeechPreferences{Codex: true, ReplaceSound: true})
+	a.prefs = a.prefs.SetSpeech(prefs.SpeechPreferences{Codex: true, CodexMode: prefs.SpeechSystem, ReplaceSound: true})
 	a.cueStart(events.Codex)
 	if len(speaker.said) != 1 || len(audio.plays) != 0 {
 		t.Fatalf("said %v plays %v, want speech instead of sound", speaker.said, audio.plays)
@@ -456,7 +456,7 @@ func TestNoVoicesFallsBackToTheSound(t *testing.T) {
 	speaker := &fakeSpeaker{}
 	audio := &fakeAudio{}
 	a := &App{audio: audio, speech: speaker, prefs: prefs.Default(), voicesLoaded: true}
-	a.prefs = a.prefs.SetSpeech(prefs.SpeechPreferences{Codex: true, ReplaceSound: true})
+	a.prefs = a.prefs.SetSpeech(prefs.SpeechPreferences{Codex: true, CodexMode: prefs.SpeechSystem, ReplaceSound: true})
 	a.cueStart(events.Codex)
 	if len(speaker.said) != 0 {
 		t.Fatalf("said %v without a voice", speaker.said)
@@ -478,7 +478,7 @@ func TestSpeechIsOffByDefault(t *testing.T) {
 func TestSpeechFailureDoesNotStopTheCue(t *testing.T) {
 	speaker := &fakeSpeaker{speakErr: errors.New("no output")}
 	a := &App{audio: &fakeAudio{}, speech: speaker, prefs: prefs.Default()}
-	a.prefs = a.prefs.SetSpeech(prefs.SpeechPreferences{Codex: true})
+	a.prefs = a.prefs.SetSpeech(prefs.SpeechPreferences{Codex: true, CodexMode: prefs.SpeechSystem})
 	a.cueStart(events.Codex)
 	if a.state.cueCount != 1 {
 		t.Fatalf("count %d, want the cue counted", a.state.cueCount)
@@ -534,7 +534,9 @@ func TestVoiceThatIsNotInstalledFallsBack(t *testing.T) {
 func TestSpeechSectionAppearsWithVoices(t *testing.T) {
 	s := settings{tab: tabCues, pane: paneSound, source: string(events.Codex)}
 	s.setVoices([]speech.Voice{{ID: "id-zh", Name: "Huihui", Language: "zh-CN"}})
-	s.applySpeech(prefs.Default())
+	s.applySpeech(prefs.Default().SetSpeech(prefs.SpeechPreferences{
+		CodexMode: prefs.SpeechSystem,
+	}))
 	changed := 0
 	s.onChangeSpeech = func() { changed++ }
 	tt := ui.NewTester(s.view, 820, 700)
@@ -563,7 +565,7 @@ func TestSpeechSectionOffersRecordingsWithoutVoices(t *testing.T) {
 	s.setVoices(nil)
 	// The Mac greys the mode picker while speech is off, so a user turns it
 	// on first; the test does the same.
-	s.applySpeech(prefs.Default().SetSpeech(prefs.SpeechPreferences{Codex: true}))
+	s.applySpeech(prefs.Default().SetSpeech(prefs.SpeechPreferences{Codex: true, CodexMode: prefs.SpeechSystem}))
 	changed := 0
 	s.onChangeSpeech = func() { changed++ }
 	tt := ui.NewTester(s.view, 820, 700)
@@ -682,19 +684,19 @@ func TestTheGlowPaneShowsTheColoursTheEffectUses(t *testing.T) {
 		return ok
 	}
 
-	if !shows("颜色") || shows("主色") || shows("副色") {
+	if !shows("光效颜色") || shows("主色") || shows("副色") {
 		t.Fatalf("monochrome breathing does not show one colour: %q", tt.Texts())
 	}
 	if err := tt.Click("双色交替闪烁"); err != nil {
 		t.Fatal(err)
 	}
-	if !shows("主色") || !shows("副色") || shows("颜色") {
+	if !shows("主色") || !shows("副色") || shows("光效颜色") {
 		t.Fatalf("the two-color flash does not show the pair: %q", tt.Texts())
 	}
 	if err := tt.Click("单色呼吸"); err != nil {
 		t.Fatal(err)
 	}
-	if !shows("颜色") || shows("主色") {
+	if !shows("光效颜色") || shows("主色") {
 		t.Fatalf("the single colour did not come back: %q", tt.Texts())
 	}
 }
@@ -745,7 +747,7 @@ func TestPreviewButtonsPreviewTheSelectedSource(t *testing.T) {
 	s.applyDisplay(prefs.Default())
 	s.applySound(prefs.Default())
 	s.setVoices([]speech.Voice{{ID: "id-zh", Name: "Huihui", Language: "zh-CN"}})
-	s.applySpeech(prefs.Default().SetSpeech(prefs.SpeechPreferences{OpenCode: true}))
+	s.applySpeech(prefs.Default().SetSpeech(prefs.SpeechPreferences{OpenCode: true, OpenCodeMode: prefs.SpeechSystem}))
 
 	var glow, sound, spoken []events.Source
 	s.onPreviewGlow = func(source events.Source) { glow = append(glow, source) }
@@ -774,7 +776,7 @@ func TestPreviewButtonsPreviewTheSelectedSource(t *testing.T) {
 
 func TestSpeechTextWritesToTheSelectedSourceOnly(t *testing.T) {
 	a := &App{
-		prefs:     prefs.Default().SetSpeech(prefs.SpeechPreferences{OpenCode: true}),
+		prefs:     prefs.Default().SetSpeech(prefs.SpeechPreferences{OpenCode: true, OpenCodeMode: prefs.SpeechSystem}),
 		prefsPath: filepath.Join(t.TempDir(), "preferences.json"),
 	}
 	a.state.applySound(a.prefs)

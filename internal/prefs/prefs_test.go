@@ -165,11 +165,13 @@ func TestSpeechChoicesSurviveASave(t *testing.T) {
 	}
 }
 
-func TestAnnouncementDefaultsToTheSystemVoiceAndTheDefaultClip(t *testing.T) {
+// TestAnnouncementDefaultsToTheBundledClip keeps a new install audible on a
+// machine with no SAPI voice: the clip is the default for both producers.
+func TestAnnouncementDefaultsToTheBundledClip(t *testing.T) {
 	p := Default()
 	for _, source := range []events.Source{events.Codex, events.OpenCode} {
-		if got := p.Speech.Mode(source); got != SpeechSystem {
-			t.Errorf("%s announces with %q, want the system voice", source, got)
+		if got := p.Speech.Mode(source); got != SpeechRecording {
+			t.Errorf("%s announces with %q, want the bundled clip", source, got)
 		}
 		if got := p.Speech.Recording(source); got != recordings.DefaultID {
 			t.Errorf("%s plays %q, want the default clip", source, got)
@@ -214,7 +216,7 @@ func TestAnUnknownSpeechModeOrClipFallsBack(t *testing.T) {
 	if p.Speech.CodexMode != "" {
 		t.Fatalf("an unknown mode was kept: %q", p.Speech.CodexMode)
 	}
-	if got := p.Speech.Mode(events.Codex); got != SpeechSystem {
+	if got := p.Speech.Mode(events.Codex); got != SpeechRecording {
 		t.Fatalf("an unknown mode announced with %q", got)
 	}
 	if got := p.Speech.Recording(events.Codex); got != recordings.DefaultID {
