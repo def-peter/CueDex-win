@@ -1,11 +1,14 @@
 package prefs
 
 import (
+	"image/color"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/def-peter/cuedex-win/internal/events"
+	"github.com/def-peter/cuedex-win/internal/overlay"
 )
 
 func TestDefaultGivesEachProducerItsOwnSound(t *testing.T) {
@@ -157,5 +160,171 @@ func TestSpeechChoicesSurviveASave(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("loaded %+v, want %+v", got, want)
+	}
+}
+
+func TestQuietHoursCrossMidnight(t *testing.T) {
+	quiet := QuietHours{Enabled: true, Start: 22 * 60, End: 7 * 60}
+	cases := []struct {
+		hour, minute int
+		want         bool
+	}{
+		{21, 59, false},
+		{22, 0, true},
+		{23, 30, true},
+		{0, 0, true},
+		{6, 59, true},
+		{7, 0, false},
+		{12, 0, false},
+	}
+	for _, c := range cases {
+		at := time.Date(2026, 11, 5, c.hour, c.minute, 0, 0, time.Local)
+		if got := quiet.Quiet(at); got != c.want {
+			t.Errorf("%02d:%02d: quiet = %v, want %v", c.hour, c.minute, got, c.want)
+		}
+	}
+}
+
+func TestQuietHoursEqualEndsBlockTheWholeDay(t *testing.T) {
+	quiet := QuietHours{Enabled: true, Start: 9 * 60, End: 9 * 60}
+	for _, hour := range []int{0, 9, 15, 23} {
+		at := time.Date(2026, 11, 5, hour, 0, 0, 0, time.Local)
+		if !quiet.Quiet(at) {
+			t.Errorf("%02d:00 is not quiet although the window covers the day", hour)
+		}
+	}
+	if (QuietHours{Enabled: false, Start: 9 * 60, End: 9 * 60}).Quiet(time.Now()) {
+		t.Fatal("a disabled window is quiet")
+	}
+}
+
+func TestPauseExpiresOnItsOwn(t *testing.T) {
+	at := time.Date(2026, 11, 5, 12, 0, 0, 0, time.Local)
+	paused := General{Enabled: true}.PauseFor(at, 15*time.Minute)
+	if !paused.PausedAt(at) {
+		t.Fatal("a fresh pause is not in effect")
+	}
+	if !paused.PausedAt(at.Add(14 * time.Minute)) {
+		t.Fatal("the pause ended early")
+	}
+	if paused.PausedAt(at.Add(15 * time.Minute)) {
+		t.Fatal("the pause outlived its deadline")
+	}
+	if got := paused.Remaining(at); got != 15*time.Minute {
+		t.Fatalf("remaining %v", got)
+	}
+	if got := paused.Remaining(at.Add(20 * time.Minute)); got != 0 {
+		t.Fatalf("remaining after the deadline is %v", got)
+	}
+}
+
+func TestPauseUntilResumeHasNoDeadline(t *testing.T) {
+	at := time.Now()
+	paused := General{Enabled: true}.PauseFor(at, 0)
+	if !paused.PausedAt(at.Add(72 * time.Hour)) {
+		t.Fatal("a pause until resume expired")
+	}
+	if resumed := paused.Resume(); resumed.PausedAt(at.Add(time.Minute)) {
+		t.Fatal("resume left the pause on")
+	}
+}
+
+func TestCuesRespectsEverySwitch(t *testing.T) {
+	at := time.Date(2026, 11, 5, 12, 0, 0, 0, time.Local)
+	open := Default()
+	if !open.Cues(events.Codex, at) || !open.Cues(events.OpenCode, at) {
+		t.Fatal("the defaults do not cue")
+	}
+
+	off := open.SetGeneral(General{Enabled: false})
+	if off.Cues(events.Codex, at) {
+		t.Fatal("a disabled app cued")
+	}
+
+	hidden := open.SetDisplay(events.Codex, DisplayPreferences{Enabled: false})
+	if hidden.Cues(events.Codex, at) {
+		t.Fatal("a hidden producer cued")
+	}
+	if !hidden.Cues(events.OpenCode, at) {
+		t.Fatal("hiding codex also hid opencode")
+	}
+
+	paused := open.SetGeneral(open.General.PauseFor(at, time.Hour))
+	if paused.Cues(events.Codex, at) {
+		t.Fatal("a paused app cued")
+	}
+
+	quiet := open.SetGeneral(General{Enabled: true, QuietHours: QuietHours{Enabled: true, Start: 11 * 60, End: 13 * 60}})
+	if quiet.Cues(events.Codex, at) {
+		t.Fatal("a cue played inside the quiet hours")
+	}
+}
+
+func TestNormalizedRepairsTheDisplayBlock(t *testing.T) {
+	p := Preferences{
+		Display: DisplayChoices{
+			Codex:    DisplayPreferences{Enabled: true, Animation: overlay.Animation(99), Color: "red"},
+			OpenCode: DisplayPreferences{Enabled: true, Animation: overlay.AlternatingFlash, Color: "#123456"},
+		},
+	}.Normalized()
+	if p.Display.Codex.Animation != overlay.Breathing {
+		t.Fatalf("an unknown animation stayed: %v", p.Display.Codex.Animation)
+	}
+	if p.Display.Codex.Color != DefaultColors.Codex.Color {
+		t.Fatalf("an invalid colour stayed: %q", p.Display.Codex.Color)
+	}
+	if p.Display.OpenCode.Color != DefaultColors.OpenCode.Color {
+		t.Fatalf("a colour outside the palette stayed: %q", p.Display.OpenCode.Color)
+	}
+	if p.Display.OpenCode.Animation != overlay.AlternatingFlash {
+		t.Fatalf("a valid animation was changed: %v", p.Display.OpenCode.Animation)
+	}
+}
+
+func TestLoadUpgradesAFileFromTheFirstBuild(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "preferences.json")
+	body := `{"sound":{"codex":{"id":"knock","volume":12}}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Version != Version {
+		t.Fatalf("version %d after loading an old file", p.Version)
+	}
+	if !p.General.Enabled {
+		t.Fatal("an old file switched the master switch off")
+	}
+	if p.General.Language != LanguageSystem {
+		t.Fatalf("an old file chose the language %q", p.General.Language)
+	}
+	if !p.Display.Codex.Enabled || p.Display.Codex.Color != DefaultColors.Codex.Color {
+		t.Fatalf("an old file left the display block empty: %+v", p.Display.Codex)
+	}
+	if p.Sound.Codex.ID != "knock" {
+		t.Fatalf("the upgrade lost the stored sound: %+v", p.Sound.Codex)
+	}
+}
+
+func TestDisplayChoicesSurviveASave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "preferences.json")
+	choice := DisplayPreferences{Enabled: true, Animation: overlay.AlternatingFlash, Color: "#F472B6"}
+	want := Default().
+		SetDisplay(events.OpenCode, choice).
+		SetGeneral(General{Language: LanguageEnglish, Enabled: true, OpenAtLogin: true})
+	if err := Save(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("loaded %+v, want %+v", got, want)
+	}
+	if got.Display.OpenCode.Colour() != (color.NRGBA{R: 0xF4, G: 0x72, B: 0xB6, A: 255}) {
+		t.Fatalf("the colour came back as %v", got.Display.OpenCode.Colour())
 	}
 }
