@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"image/color"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,7 +11,9 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/def-peter/cuedex-win/internal/events"
+	"github.com/def-peter/cuedex-win/internal/i18n"
 	"github.com/def-peter/cuedex-win/internal/integrations"
+	"github.com/def-peter/cuedex-win/internal/overlay"
 	"github.com/def-peter/cuedex-win/internal/playback"
 	"github.com/def-peter/cuedex-win/internal/prefs"
 	"github.com/def-peter/cuedex-win/internal/sound"
@@ -43,6 +46,8 @@ func TestCueWithoutAWatcherIsHarmless(t *testing.T) {
 // The panel runs without a window in tests, which click as a user would.
 func TestViewTogglesPause(t *testing.T) {
 	a := &App{}
+	a.prefs = prefs.Default()
+	a.state.applyGeneral(a.prefs.General, time.Now())
 	a.state.onTogglePause = a.togglePause
 	tt := ui.NewTester(a.state.view, 420, 660)
 
@@ -59,6 +64,8 @@ func TestViewTogglesPause(t *testing.T) {
 
 func TestViewShowsLastCue(t *testing.T) {
 	a := &App{}
+	a.prefs = prefs.Default()
+	a.state.applyGeneral(a.prefs.General, time.Now())
 	a.state.cueCount = 2
 	a.state.lastCue = time.Date(2026, 11, 5, 14, 32, 7, 0, time.Local)
 	a.state.lastSource = events.OpenCode
@@ -78,7 +85,8 @@ func TestCueStartRecordsTheSource(t *testing.T) {
 }
 
 func TestSourceColoursDiffer(t *testing.T) {
-	codex, opencode := sourceCue(events.Codex), sourceCue(events.OpenCode)
+	a := &App{prefs: prefs.Default()}
+	codex, opencode := a.sourceCue(events.Codex), a.sourceCue(events.OpenCode)
 	if codex.Primary == opencode.Primary {
 		t.Fatalf("both sources cue in %v", codex.Primary)
 	}
@@ -88,7 +96,7 @@ func TestSourceColoursDiffer(t *testing.T) {
 	if !codex.Animation.Valid() || !opencode.Animation.Valid() {
 		t.Fatalf("animations %v and %v", codex.Animation, opencode.Animation)
 	}
-	if got := sourceCue(""); got != codex {
+	if got := a.sourceCue(""); got != codex {
 		t.Fatalf("a bare wake cues %+v, want the product cue %+v", got, codex)
 	}
 }
@@ -141,8 +149,8 @@ func TestVolumeZeroStillCues(t *testing.T) {
 	if len(audio.plays) != 1 || audio.volumes[0] != 0 {
 		t.Fatalf("plays %v volumes %v, want silence requested", audio.plays, audio.volumes)
 	}
-	if a.state.soundProblem != "" {
-		t.Fatalf("silence was reported as a problem: %q", a.state.soundProblem)
+	if !a.state.soundProblem.empty() {
+		t.Fatalf("silence was reported as a problem: %v", a.state.soundProblem)
 	}
 }
 
@@ -174,8 +182,8 @@ func TestSoundFailureIsReportedNotFatal(t *testing.T) {
 	if a.state.cueCount != 1 {
 		t.Fatalf("a failed sound stopped the cue: %d", a.state.cueCount)
 	}
-	if !strings.Contains(a.state.soundProblem, "no device") {
-		t.Fatalf("problem %q, want the cause shown", a.state.soundProblem)
+	if !strings.Contains(a.state.soundProblem.detail, "no device") {
+		t.Fatalf("problem %+v, want the cause shown", a.state.soundProblem)
 	}
 }
 
@@ -230,7 +238,7 @@ func TestViewShowsTheSoundControls(t *testing.T) {
 	s.applySound(prefs.Default())
 	previewed := []events.Source{}
 	s.onPreviewSound = func(source events.Source) { previewed = append(previewed, source) }
-	tt := ui.NewTester(s.view, 420, 660)
+	tt := ui.NewTester(s.view, 420, 1200)
 
 	if !tt.HasText("提示音") {
 		t.Fatalf("texts %q", tt.Texts())
@@ -355,8 +363,8 @@ func TestSpeechFailureDoesNotStopTheCue(t *testing.T) {
 	if a.state.cueCount != 1 {
 		t.Fatalf("count %d, want the cue counted", a.state.cueCount)
 	}
-	if !strings.Contains(a.state.speechProblem, "no output") {
-		t.Fatalf("problem %q", a.state.speechProblem)
+	if !strings.Contains(a.state.speechProblem.detail, "no output") {
+		t.Fatalf("problem %+v", a.state.speechProblem)
 	}
 }
 
@@ -409,7 +417,7 @@ func TestSpeechSectionAppearsWithVoices(t *testing.T) {
 	s.applySpeech(prefs.Default())
 	changed := 0
 	s.onChangeSpeech = func() { changed++ }
-	tt := ui.NewTester(s.view, 420, 790)
+	tt := ui.NewTester(s.view, 420, 1200)
 
 	if !tt.HasText("语音播报") || !tt.HasText("不朗读任何回复内容") {
 		t.Fatalf("texts %q", tt.Texts())
@@ -433,7 +441,7 @@ func TestSpeechSectionIsHiddenWithoutVoices(t *testing.T) {
 	s := settings{}
 	s.setVoices(nil)
 	s.applySpeech(prefs.Default())
-	tt := ui.NewTester(s.view, 420, 790)
+	tt := ui.NewTester(s.view, 420, 1200)
 	if tt.HasText("语音播报") {
 		t.Fatalf("speech is offered without a voice: %q", tt.Texts())
 	}
@@ -449,7 +457,7 @@ func TestViewTogglesCodexIntegration(t *testing.T) {
 		enabled = !enabled
 		s.codexInstalled = enabled
 	}
-	tt := ui.NewTester(s.view, 420, 660)
+	tt := ui.NewTester(s.view, 420, 1200)
 	if !tt.HasText("未安装：Codex 跑完一轮回复时不会提示") {
 		t.Fatalf("texts %q", tt.Texts())
 	}
@@ -470,7 +478,7 @@ func TestCodexDetailSaysWhatIsMissing(t *testing.T) {
 		{settings{codexInstalled: true}, "钩子已安装，但没有找到 Codex；装好 Codex 后自动生效"},
 		{settings{}, "未安装，也没有找到 Codex"},
 		{settings{codexDetected: true}, "未安装：Codex 跑完一轮回复时不会提示"},
-		{settings{codexProblem: "坏了"}, "坏了"},
+		{settings{codexProblem: newProblem(codexProblemKind, "坏了")}, "Codex 集成操作失败：坏了"},
 	} {
 		if got := tc.state.codexDetail(); got != tc.want {
 			t.Errorf("%+v: got %q, want %q", tc.state, got, tc.want)
@@ -479,10 +487,10 @@ func TestCodexDetailSaysWhatIsMissing(t *testing.T) {
 }
 
 func TestCodexProblemNamesTheBrokenFile(t *testing.T) {
-	if got := codexProblem(integrations.ErrInvalidHooks); !strings.Contains(got, "hooks.json") {
+	if got := codexProblem(integrations.ErrInvalidHooks).text(chinese); !strings.Contains(got, "hooks.json") {
 		t.Fatalf("got %q, want the file named", got)
 	}
-	if got := codexProblem(errors.New("access denied")); !strings.Contains(got, "access denied") {
+	if got := codexProblem(errors.New("access denied")).text(chinese); !strings.Contains(got, "access denied") {
 		t.Fatalf("got %q, want the cause shown", got)
 	}
 }
@@ -495,7 +503,7 @@ func TestOpenCodeDetailSaysWhatIsMissing(t *testing.T) {
 		{settings{opencodeInstalled: true, opencodeVersion: "2.2.5"}, "已安装：重启 OpenCode 后生效，主会话跑完一轮会提示"},
 		{settings{opencodeVersion: "2.2.5"}, "未安装（检测到 OpenCode 2.2.5）"},
 		{settings{}, "未检测到 OpenCode"},
-		{settings{opencodeProblem: "坏了"}, "坏了"},
+		{settings{opencodeProblem: newProblem(openCodeOther, "坏了")}, "OpenCode 集成操作失败：坏了"},
 	} {
 		if got := tc.state.openCodeDetail(); got != tc.want {
 			t.Errorf("%+v: got %q, want %q", tc.state, got, tc.want)
@@ -504,13 +512,179 @@ func TestOpenCodeDetailSaysWhatIsMissing(t *testing.T) {
 }
 
 func TestOpenCodeProblemExplainsTheVersionGate(t *testing.T) {
-	if got := openCodeProblem(integrations.UnsupportedVersionError{Version: "3.0.0"}); !strings.Contains(got, "3.0.0") {
+	if got := openCodeProblem(integrations.UnsupportedVersionError{Version: "3.0.0"}).text(chinese); !strings.Contains(got, "3.0.0") {
 		t.Fatalf("got %q, want the detected version", got)
 	}
-	if got := openCodeProblem(integrations.UnsupportedVersionError{}); !strings.Contains(got, "没有检测到") {
+	if got := openCodeProblem(integrations.UnsupportedVersionError{}).text(chinese); !strings.Contains(got, "没有检测到") {
 		t.Fatalf("got %q, want it to say OpenCode is missing", got)
 	}
-	if got := openCodeProblem(integrations.ErrForeignPlugin); !strings.Contains(got, "cuedex.js") {
+	if got := openCodeProblem(integrations.ErrForeignPlugin).text(chinese); !strings.Contains(got, "cuedex.js") {
 		t.Fatalf("got %q, want the file named", got)
+	}
+}
+
+func TestPanelIsDrawnInTheStoredLanguage(t *testing.T) {
+	a := &App{prefs: prefs.Default()}
+	a.prefs = a.prefs.SetGeneral(prefs.General{Language: prefs.LanguageEnglish, Enabled: true})
+	a.state.applyGeneral(a.prefs.General, time.Now())
+	a.state.applyDisplay(a.prefs)
+	tt := ui.NewTester(a.state.view, 420, 1200)
+
+	for _, want := range []string{"General", "Cue on completion", "Appearance", "Cue sound", "Integrations", "Close"} {
+		if !tt.HasText(want) {
+			t.Errorf("missing %q; texts %q", want, tt.Texts())
+		}
+	}
+	if tt.HasText("提示音") {
+		t.Errorf("the Chinese section is still shown: %q", tt.Texts())
+	}
+}
+
+func TestSoundAndColourNamesAreLocalized(t *testing.T) {
+	if len(chinese.soundLabels()) != len(sound.All()) || len(english.soundLabels()) != len(sound.All()) {
+		t.Fatalf("sound labels %q and %q do not name every sound", chinese.soundLabels(), english.soundLabels())
+	}
+	if chinese.soundLabels()[0] == english.soundLabels()[0] {
+		t.Fatalf("both languages name the first sound %q", chinese.soundLabels()[0])
+	}
+	if len(chinese.colourLabels()) != len(prefs.Palette) {
+		t.Fatalf("%d colour names for %d palette entries", len(chinese.colourLabels()), len(prefs.Palette))
+	}
+	if chinese.colourLabels()[0] == english.colourLabels()[0] {
+		t.Fatalf("both languages name the first colour %q", chinese.colourLabels()[0])
+	}
+}
+
+// TestPanelDrawsTheSoundsInItsLanguage keeps the picker from showing Chinese
+// names inside an English panel.
+func TestPanelDrawsTheSoundsInItsLanguage(t *testing.T) {
+	a := &App{prefs: prefs.Default()}
+	a.prefs = a.prefs.SetGeneral(prefs.General{Language: prefs.LanguageEnglish, Enabled: true})
+	a.state.applyGeneral(a.prefs.General, time.Now())
+	a.state.applySound(a.prefs)
+	tt := ui.NewTester(a.state.view, 420, 1200)
+
+	if !tt.HasText("Rise") || !tt.HasText("Knock") {
+		t.Fatalf("English sound names missing: %q", tt.Texts())
+	}
+	if tt.HasText("上扬") {
+		t.Fatalf("a Chinese sound name is still shown: %q", tt.Texts())
+	}
+}
+
+func TestPanelShowsTheGeneralControls(t *testing.T) {
+	a := &App{prefs: prefs.Default()}
+	a.state.applyGeneral(a.prefs.General, time.Now())
+	a.state.applyDisplay(a.prefs)
+	tt := ui.NewTester(a.state.view, 420, 1200)
+
+	for _, want := range []string{"通用", "启用提示", "语言", "暂停", "免打扰", "开机时启动", "外观", "交替闪烁"} {
+		if !tt.HasText(want) {
+			t.Errorf("missing %q; texts %q", want, tt.Texts())
+		}
+	}
+}
+
+func TestPanelPauseChoicesStoreADeadline(t *testing.T) {
+	a := &App{prefs: prefs.Default(), player: playback.New(func(events.Source) {}, func() {})}
+	defer a.player.Close()
+	a.state.applyGeneral(a.prefs.General, time.Now())
+	a.state.onPauseFor = a.pauseFor
+	tt := ui.NewTester(a.state.view, 420, 1200)
+
+	if err := tt.Click("1 小时"); err != nil {
+		t.Fatal(err)
+	}
+	if !a.state.paused || !a.prefs.General.Paused {
+		t.Fatalf("the panel is not paused: %v %+v", a.state.paused, a.prefs.General)
+	}
+	remaining := a.prefs.General.Remaining(time.Now())
+	if remaining < 59*time.Minute || remaining > time.Hour {
+		t.Fatalf("remaining %v, want about an hour", remaining)
+	}
+	if a.player.Submit(events.Event{Source: events.Codex, CompletedAt: time.Now()}) {
+		t.Fatal("the player took a cue while paused")
+	}
+}
+
+func TestPanelLanguageSwitchIsStored(t *testing.T) {
+	a := &App{prefs: prefs.Default()}
+	a.state.applyGeneral(a.prefs.General, time.Now())
+	a.state.applyDisplay(a.prefs)
+	// The picker binds to a label, so this is what a click on "English" leaves
+	// behind before the change handler runs.
+	a.state.languageLabel = a.state.languageOptions()[2]
+	a.changeLanguage()
+
+	if a.prefs.General.Language != prefs.LanguageEnglish {
+		t.Fatalf("stored language %q", a.prefs.General.Language)
+	}
+	if a.state.language != i18n.English {
+		t.Fatalf("panel language %q", a.state.language)
+	}
+	tt := ui.NewTester(a.state.view, 420, 1200)
+	if !tt.HasText("General") {
+		t.Fatalf("the panel did not switch: %q", tt.Texts())
+	}
+}
+
+func TestSavedDisplayReachesTheCue(t *testing.T) {
+	a := &App{prefs: prefs.Default().SetDisplay(events.Codex, prefs.DisplayPreferences{
+		Enabled:   true,
+		Animation: overlay.AlternatingFlash,
+		Color:     "#F472B6",
+	})}
+	cue := a.sourceCue(events.Codex)
+	if cue.Primary != (color.NRGBA{R: 0xF4, G: 0x72, B: 0xB6, A: 255}) {
+		t.Fatalf("primary %v, want the saved colour", cue.Primary)
+	}
+	if cue.Animation != overlay.AlternatingFlash {
+		t.Fatalf("animation %v, want the saved one", cue.Animation)
+	}
+	if cue.Secondary == cue.Primary {
+		t.Fatal("the flash alternates with the same colour")
+	}
+}
+
+func TestPanelDisplayChoicesAreStored(t *testing.T) {
+	a := &App{prefs: prefs.Default()}
+	a.state.applyGeneral(a.prefs.General, time.Now())
+	a.state.applyDisplay(a.prefs)
+	a.state.codexDisplay.enabled = false
+	a.state.codexDisplay.animation = animationFlash
+	a.state.codexDisplay.colour = "粉"
+	a.changeDisplay(events.Codex)
+
+	got := a.prefs.Display.Codex
+	if got.Enabled || got.Animation != overlay.AlternatingFlash || got.Color != "#F472B6" {
+		t.Fatalf("stored %+v", got)
+	}
+	if a.prefs.Display.OpenCode != prefs.Default().Display.OpenCode {
+		t.Fatalf("the other producer changed: %+v", a.prefs.Display.OpenCode)
+	}
+}
+
+func TestPanelQuietHoursAreStored(t *testing.T) {
+	a := &App{prefs: prefs.Default()}
+	a.state.applyGeneral(a.prefs.General, time.Now())
+	a.state.quietEnabled = true
+	a.state.quietStart = "21:30"
+	a.state.quietEnd = "08:00"
+	a.changeGeneral()
+
+	hours := a.prefs.General.QuietHours
+	if !hours.Enabled || hours.Start != 21*60+30 || hours.End != 8*60 {
+		t.Fatalf("stored %+v", hours)
+	}
+}
+
+func TestClockLabelsRoundTrip(t *testing.T) {
+	for _, minute := range []int{0, 30, 90, 23*60 + 30} {
+		if got := minuteOf(clockLabel(minute)); got != minute {
+			t.Errorf("%d became %q and back to %d", minute, clockLabel(minute), got)
+		}
+	}
+	if got := len(clockOptions()); got != 48 {
+		t.Fatalf("%d half-hour options", got)
 	}
 }

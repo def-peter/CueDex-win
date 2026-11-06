@@ -50,6 +50,12 @@ func main() {
 		if opts.cue {
 			a.Cue()
 		}
+		// A launch by the user opens the panel. The startup entry's
+		// --background launch stays in the tray, and a --cue wake from a
+		// producer never flashes a window: both only cue.
+		if !opts.background && !opts.cue {
+			a.Open()
+		}
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
