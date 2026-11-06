@@ -60,15 +60,17 @@ macOS 版（`D:\code\me\go\CueDex`，Swift）已上线。**本仓库是 Windows 
 
 ```
 go build ./...        exit 0
-go test ./...         ok  1.4s（ui.NewTester 无窗口测试）
+go test ./...         ok  约 2s（ui.NewTester 无窗口测试）
 go vet / gofmt        干净
-go tool mygo build    CueDex.exe 9.5 MB + NSIS 安装包 3.3 MB，18.3 s
+go tool mygo build    CueDex.exe 10.6 MB + NSIS 安装包 3.7 MB，约 12 s
 ```
 
-NSIS 由 CLI 自动下载，包管理器 / 签名 / 更新都还没碰。
+NSIS 由 CLI 自动下载，签名 / 更新都还没碰。
 
-仓库：`main` 分支，首个提交 `3447d6f`，**尚未添加 git 远程**。
-`main.go` 目前还是模板的计数器界面，等着被替换。
+仓库：`main` 分支，远程 `origin` 已就绪。已完成：托盘外壳、事件管线、
+Codex hook、OpenCode 插件、播放编排、提示音、SAPI 语音、每屏辉光覆盖层、
+设置面板与偏好（通用 / 外观 / 提示音 / 语音 / 集成）。`main.go` 只做参数
+解析与装配。
 
 ## 5. 现成的参考实现（比文档可靠）
 
@@ -216,6 +218,35 @@ mygo.WindowOptions{
 - `WM_DISPLAYCHANGE` 触发重建；播放中的提示会用新几何重开，`Show` 期间一律
   先比较显示器签名，几何没变就不重建。
 
+### 6.4 设置面板与偏好（`internal/app` + `internal/prefs`，本机双屏实测）
+
+结论：**单列滚动面板可用，中英文都排得下，改动即时生效并落盘。**
+
+| 项 | 结果 |
+| --- | --- |
+| 面板尺寸 | 420x790 逻辑像素；本机 150% 屏上实际 rect 630x1185 @ (965,171) |
+| 关闭行为 | `OnBlur` 自动关窗，进程与托盘保留；托盘「打开设置」可再次打开 |
+| 偏好文件 | `%APPDATA%\CueDex\preferences.json`，`version: 2`，原子写 + 400 ms 防抖 |
+| 自启 | 开：`HKCU\...\Run\CueDex = "<exe>" --background`；关：删除该值，两处状态同步 |
+| 旧文件 | 无 `version` 的文件按默认值补全，不会启动失败 |
+
+实现事实：
+
+- `--background` 与普通启动现在是两回事：普通启动（无 `--background`、无
+  `--cue`）会打开设置面板；自启的 `--background` 和 producer 的 `--cue`
+  唤醒都只留在托盘。首启用户能看到面板，登录时不会弹出窗口。
+- 托盘退出项不能用 `mygo.RoleQuit`：它的标签是 MyGo 自带的英文 "Exit"，
+  不跟随面板语言，改成自己的本地化项 + `mygo.App.Quit()`。
+- 提示音与颜色名称随界面语言走（`wording.Sounds` / `wording.Colours`），
+  `sound.Labels()` 只作为兜底，不直接进面板。
+- 窗口 `OnBlur` 即关闭，任何抢焦点的自动化（UIA 点下拉、SendKeys、新控制台）
+  都会把它关掉。真机点选验证因此只覆盖了能靠鼠标坐标完成的项，
+  语言切换与暂停按钮由 `ui.NewTester` 测试 + 无窗口截图确认。
+- `wmDestroy` 不能 `PostQuitMessage`：重建显示器几何时会先销毁旧窗口，
+  提前结束消息循环并泄漏新窗口。`TestCloseLeavesNoWindows` 守住这条。
+- overlay 测试按 PID 过滤窗口，并用 `SendMessageTimeoutW` + `SMTO_ABORTIFHUNG`，
+  否则会和运行中的 `CueDex.exe --cue` 互相干扰或挂死。
+
 ## 7. 待验证的未知（不要用 mac 经验假设）
 
 1. **Codex 在 Windows 上如何执行 `hooks.json` 的 command** —— cmd、PowerShell
@@ -224,9 +255,12 @@ mygo.WindowOptions{
 3. OpenCode 在 Windows 的全局插件目录是否仍是 `~/.config/opencode/plugins/`，
    还是 `%APPDATA%\opencode`；Node 下 XDG 的解析结果。
 4. ~~SAPI 语音枚举~~ 已解决，见 §6.2：直接 COM 可用（不需要 `go-ole`），本机有 zh-CN voice。
-5. `App.SetOpenAtLogin` 写 Run 键时是否带后台参数。
+5. ~~`App.SetOpenAtLogin` 写 Run 键时是否带后台参数~~ 已解决：不用 MyGo 的
+   自启接口，自己写 `HKCU\...\Run`，命令固定带 `--background`，见 §6.4。
 6. `plugins/updater` 的实际能力：签名、静默安装、回滚。
 7. 未签名 exe 的 SmartScreen 实际拦截面。
+8. 面板失焦即关，导致语言下拉与暂停按钮无法用自动化点选；需要人工确认一次
+   运行时切换语言后整窗重排没有跳动。
 
 ## 8. 跨项目契约
 
