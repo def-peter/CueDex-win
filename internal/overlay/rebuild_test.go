@@ -9,18 +9,34 @@ import (
 )
 
 var (
-	procEnumWindows    = user32.NewProc("EnumWindows")
-	procGetClassNameW  = user32.NewProc("GetClassNameW")
-	procGetWindowRect  = user32.NewProc("GetWindowRect")
-	procGetWindowLongW = user32.NewProc("GetWindowLongW")
-	procSendMessageW   = user32.NewProc("SendMessageW")
+	procEnumWindows              = user32.NewProc("EnumWindows")
+	procGetClassNameW            = user32.NewProc("GetClassNameW")
+	procGetWindowRect            = user32.NewProc("GetWindowRect")
+	procGetWindowLongW           = user32.NewProc("GetWindowLongW")
+	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
+	procSendMessageTimeoutW      = user32.NewProc("SendMessageTimeoutW")
+	procGetCurrentProcessId      = kernel32.NewProc("GetCurrentProcessId")
+
+	// smtoAbortIfHung makes SendMessageTimeout return at once when the target
+	// is not pumping messages.
+	smtoAbortIfHung = uintptr(0x0002)
 )
 
 // overlayWindows lists the overlay's windows with their handles.
+//
+// Only this process's windows count: a CueDex that is already running (for
+// example because the user enabled start with Windows) has an overlay of its
+// own, and its windows must not be mistaken for the test's.
 func overlayWindows(t *testing.T) []uintptr {
 	t.Helper()
+	self, _, _ := procGetCurrentProcessId.Call()
 	var found []uintptr
 	cb := syscall.NewCallback(func(hwnd, _ uintptr) uintptr {
+		var pid uint32
+		procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+		if uintptr(pid) != self {
+			return 1
+		}
 		var name [64]uint16
 		n, _, _ := procGetClassNameW.Call(hwnd, uintptr(unsafe.Pointer(&name[0])), uintptr(len(name)))
 		if n > 0 && syscall.UTF16ToString(name[:n]) == "CueDexOverlay" {
@@ -39,20 +55,11 @@ func overlayWindows(t *testing.T) []uintptr {
 func bandRects(t *testing.T) []rect {
 	t.Helper()
 	var found []rect
-	cb := syscall.NewCallback(func(hwnd, _ uintptr) uintptr {
-		var name [64]uint16
-		n, _, _ := procGetClassNameW.Call(hwnd, uintptr(unsafe.Pointer(&name[0])), uintptr(len(name)))
-		if n == 0 || syscall.UTF16ToString(name[:n]) != "CueDexOverlay" {
-			return 1
-		}
+	for _, hwnd := range overlayWindows(t) {
 		var r rect
 		if ok, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ok != 0 {
 			found = append(found, r)
 		}
-		return 1
-	})
-	if ok, _, _ := procEnumWindows.Call(cb, 0); ok == 0 {
-		t.Fatal("EnumWindows failed")
 	}
 	return found
 }
@@ -173,9 +180,34 @@ func TestBandsAreClickThroughToolWindows(t *testing.T) {
 			t.Errorf("window %#x has WS_EX_APPWINDOW and would appear in the taskbar", hwnd)
 		}
 		// HWND passed as a hit-test target answers HTTRANSPARENT, which is what
-		// makes the system hand the click to the window below.
-		if hit, _, _ := procSendMessageW.Call(hwnd, wmNcHitTest, 0, 0x00050005); int32(hit) != -1 {
-			t.Errorf("window %#x answers hit test %d, want HTTRANSPARENT", hwnd, int32(hit))
+		// makes the system hand the click to the window below. A timeout keeps
+		// a window that is not pumping from hanging the suite.
+		var hit uintptr
+		ok, _, _ := procSendMessageTimeoutW.Call(
+			hwnd, wmNcHitTest, 0, 0x00050005,
+			smtoAbortIfHung, 250, uintptr(unsafe.Pointer(&hit)),
+		)
+		if ok == 0 || int32(hit) != -1 {
+			t.Errorf("window %#x answers hit test %d (ok %d), want HTTRANSPARENT", hwnd, int32(hit), ok)
 		}
+	}
+}
+
+// TestCloseLeavesNoWindows pins down the bug that made a display rebuild end the
+// message loop early: destroying a band answered WM_DESTROY by posting a quit,
+// so the windows built afterwards were orphaned. Closing the overlay has to
+// take every window with it.
+func TestCloseLeavesNoWindows(t *testing.T) {
+	o, err := Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(overlayWindows(t)) == 0 {
+		o.Close()
+		t.Skip("no display is attached to this session")
+	}
+	o.Close()
+	if left := overlayWindows(t); len(left) != 0 {
+		t.Fatalf("%d overlay windows left after Close: %v", len(left), left)
 	}
 }

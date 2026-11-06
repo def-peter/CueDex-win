@@ -55,6 +55,27 @@ func (a Animation) String() string {
 // Valid reports whether the value is one this package draws.
 func (a Animation) Valid() bool { return a == Breathing || a == AlternatingFlash }
 
+// MarshalText writes the animation as its name, so a preferences file and a log
+// use the same word for it.
+func (a Animation) MarshalText() ([]byte, error) {
+	if !a.Valid() {
+		return []byte(Breathing.String()), nil
+	}
+	return []byte(a.String()), nil
+}
+
+// UnmarshalText reads an animation by name. A name this build does not know
+// falls back to breathing rather than failing the whole preferences file.
+func (a *Animation) UnmarshalText(text []byte) error {
+	switch string(text) {
+	case AlternatingFlash.String(), "flash", "alternatingFlash":
+		*a = AlternatingFlash
+	default:
+		*a = Breathing
+	}
+	return nil
+}
+
 // Cue is one completion's presentation: the primary colour, the second colour
 // the flash alternates with, and the animation.
 type Cue struct {
@@ -586,9 +607,6 @@ func wndProc(hwnd, message, wparam, lparam uintptr) uintptr {
 		return 0
 	case wmNcHitTest:
 		return htTransparent
-	case wmDestroy:
-		procPostQuitMessage.Call(0)
-		return 0
 	}
 	r, _, _ := procDefWindowProcW.Call(hwnd, message, wparam, lparam)
 	return r
