@@ -98,6 +98,20 @@ func (o OpenCodeIntegration) Installed() (bool, error) {
 	return strings.TrimSpace(string(gate)) != "", nil
 }
 
+// PluginFile reports whether plugins\cuedex.js exists and whether it is this
+// app's file. A file someone else wrote is reported, not treated as a failure:
+// the panel has to say whose it is, and nothing is changed either way.
+func (o OpenCodeIntegration) PluginFile() (exists, owned bool, err error) {
+	data, err := os.ReadFile(o.PluginPath())
+	if os.IsNotExist(err) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	return true, HasOwnership(data), nil
+}
+
 // Install writes the rendered plugin and a fresh gate. A second install leaves
 // both files exactly as they were.
 func (o OpenCodeIntegration) Install() error {
