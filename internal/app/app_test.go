@@ -54,8 +54,8 @@ func TestViewTogglesPause(t *testing.T) {
 	a.state.onTogglePause = a.togglePause
 	tt := ui.NewTester(a.state.view, 820, 700)
 
-	if !tt.HasText("等待 Codex / OpenCode 的完成事件") {
-		t.Fatalf("idle panel texts %q", tt.Texts())
+	if tt.HasText("已暂停") {
+		t.Fatalf("the idle page already says it is paused: %q", tt.Texts())
 	}
 	if err := tt.Click("暂停通知"); err != nil {
 		t.Fatal(err)
@@ -65,24 +65,24 @@ func TestViewTogglesPause(t *testing.T) {
 	}
 }
 
-func TestViewShowsLastCue(t *testing.T) {
+// The page says nothing while the app simply waits: when the last cue came,
+// and how many there have been, are not worth a line in the window.
+func TestViewSaysNothingWhileItWaits(t *testing.T) {
 	a := &App{}
 	a.prefs = prefs.Default()
 	a.state.applyGeneral(a.prefs.General, time.Now())
 	a.state.cueCount = 2
-	a.state.lastCue = time.Date(2026, 11, 5, 14, 32, 7, 0, time.Local)
-	a.state.lastSource = events.OpenCode
 	tt := ui.NewTester(a.state.view, 820, 700)
 
-	if !tt.HasText("最近一次唤醒 14:32:07（OpenCode），共 2 次") {
+	if tt.HasText("最近一次") || tt.HasText("唤醒") {
 		t.Fatalf("texts %q", tt.Texts())
 	}
 }
 
-func TestCueStartRecordsTheSource(t *testing.T) {
+func TestCueStartCountsTheCue(t *testing.T) {
 	a := &App{}
 	a.cueStart(events.OpenCode)
-	if a.state.cueCount != 1 || a.state.lastSource != events.OpenCode {
+	if a.state.cueCount != 1 {
 		t.Fatalf("after one cue: %+v", a.state)
 	}
 }
@@ -267,7 +267,7 @@ func TestPreviewCuesNothing(t *testing.T) {
 func TestPreviewGlowCuesNothing(t *testing.T) {
 	a := &App{prefs: prefs.Default()}
 	a.previewGlow(events.Codex)
-	if a.state.cueCount != 0 || !a.state.lastCue.IsZero() {
+	if a.state.cueCount != 0 {
 		t.Fatalf("a glow preview counted as a cue: %+v", a.state)
 	}
 }
@@ -360,9 +360,6 @@ func TestViewShowsTheSoundControls(t *testing.T) {
 	}
 	if !tt.HasText(sound.Labels()[soundIndex(prefs.Default().Sound.Codex.ID)]) {
 		t.Errorf("the chosen sound is not shown: %q", tt.Texts())
-	}
-	if !tt.HasText("70%") {
-		t.Errorf("the default volume is not shown: %q", tt.Texts())
 	}
 	if err := tt.Click("测试声音"); err != nil {
 		t.Fatal(err)
@@ -542,7 +539,7 @@ func TestSpeechSectionAppearsWithVoices(t *testing.T) {
 	s.onChangeSpeech = func() { changed++ }
 	tt := ui.NewTester(s.view, 820, 700)
 
-	if !tt.HasText("通知文字") || !tt.HasText("播放预录语音") {
+	if !tt.HasText("通知文字") || !tt.HasText("说话人") {
 		t.Fatalf("texts %q", tt.Texts())
 	}
 	if !tt.HasText("系统朗读") || !tt.HasText("预录语音") {
@@ -616,7 +613,7 @@ func TestViewSwitchesBetweenTheThreePages(t *testing.T) {
 	if err := tt.Click("关于"); err != nil {
 		t.Fatal(err)
 	}
-	if !tt.HasText("CueDex") || !tt.HasText("当 Codex 或 OpenCode 完成回复时") {
+	if !tt.HasText("CueDex") || !tt.HasText("Codex 或 OpenCode 完成回复时") {
 		t.Fatalf("the about page is not shown: %q", tt.Texts())
 	}
 	if err := tt.Click("通用"); err != nil {
@@ -818,7 +815,7 @@ func TestViewTogglesCodexIntegration(t *testing.T) {
 		s.codexInstalled = enabled
 	}
 	tt := ui.NewTester(s.view, 820, 1200)
-	if !tt.HasText("未安装：Codex 跑完一轮回复时不会提示") {
+	if !tt.HasText("未安装") {
 		t.Fatalf("texts %q", tt.Texts())
 	}
 	if err := tt.Click("启用集成"); err != nil {
@@ -834,10 +831,10 @@ func TestCodexDetailSaysWhatIsMissing(t *testing.T) {
 		state settings
 		want  string
 	}{
-		{settings{codexInstalled: true, codexDetected: true}, "已安装：Codex 跑完一轮回复时会提示"},
-		{settings{codexInstalled: true}, "钩子已安装，但没有找到 Codex；装好 Codex 后自动生效"},
-		{settings{}, "未安装，也没有找到 Codex"},
-		{settings{codexDetected: true}, "未安装：Codex 跑完一轮回复时不会提示"},
+		{settings{codexInstalled: true, codexDetected: true}, "已安装"},
+		{settings{codexInstalled: true}, "已安装，未找到 Codex"},
+		{settings{}, "未安装，未找到 Codex"},
+		{settings{codexDetected: true}, "未安装"},
 		{settings{codexProblem: newProblem(codexProblemKind, "坏了")}, "Codex 集成操作失败：坏了"},
 	} {
 		if got := tc.state.codexDetail(); got != tc.want {
@@ -860,9 +857,9 @@ func TestOpenCodeDetailSaysWhatIsMissing(t *testing.T) {
 		state settings
 		want  string
 	}{
-		{settings{opencodeInstalled: true, opencodeVersion: "2.2.5"}, "已安装：重启 OpenCode 后生效，主会话跑完一轮会提示"},
-		{settings{opencodeVersion: "2.2.5"}, "未安装（检测到 OpenCode 2.2.5）"},
-		{settings{}, "未检测到 OpenCode"},
+		{settings{opencodeInstalled: true, opencodeVersion: "2.2.5"}, "已安装"},
+		{settings{opencodeVersion: "2.2.5"}, "OpenCode 2.2.5 版本不支持"},
+		{settings{}, "未找到 OpenCode"},
 		{settings{opencodeProblem: newProblem(openCodeOther, "坏了")}, "OpenCode 集成操作失败：坏了"},
 	} {
 		if got := tc.state.openCodeDetail(); got != tc.want {
@@ -890,7 +887,7 @@ func TestPanelIsDrawnInTheStoredLanguage(t *testing.T) {
 	a.state.applyDisplay(a.prefs)
 	tt := ui.NewTester(a.state.view, 820, 1200)
 
-	for _, want := range []string{"General", "Cue on completion", "Launch at login", "Integrations", "Diagnostics"} {
+	for _, want := range []string{"General", "Cue on completion", "Launch at login", "Integrations"} {
 		if !tt.HasText(want) {
 			t.Errorf("missing %q; texts %q", want, tt.Texts())
 		}
@@ -934,7 +931,7 @@ func TestPanelShowsTheGeneralControls(t *testing.T) {
 	a.state.applyDisplay(a.prefs)
 	tt := ui.NewTester(a.state.view, 820, 1200)
 
-	for _, want := range []string{"通用", "启用提示", "语言", "暂停", "免打扰", "登录时启动", "集成", "诊断"} {
+	for _, want := range []string{"通用", "启用提示", "语言", "暂停通知", "免打扰", "登录时启动", "集成"} {
 		if !tt.HasText(want) {
 			t.Errorf("missing %q; texts %q", want, tt.Texts())
 		}
@@ -1211,67 +1208,21 @@ func TestNotificationsAreQuietWhenNothingFailed(t *testing.T) {
 	}
 }
 
-func TestDiagnosticsReportBothIntegrations(t *testing.T) {
-	home := t.TempDir()
-	config := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(config, "plugins"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(config, "plugins", "cuedex.js"), []byte("// stranger\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	a := &App{
-		prefs:    prefs.Default(),
-		codex:    integrations.CodexIntegration{Home: home, Exe: "CueDex.exe"},
-		opencode: integrations.OpenCodeIntegration{ConfigDir: config, Version: "2.2.5"},
-	}
-	a.state.diag.lastEvent = time.Date(2026, 11, 6, 14, 32, 7, 0, time.Local)
-	a.state.diag.lastSource = events.OpenCode
-
-	a.refreshDiagnostics()
-
-	if a.state.diag.plugin != pluginForeign {
-		t.Errorf("plugin state %v", a.state.diag.plugin)
-	}
-	if a.state.diag.hooks != hooksMissing {
-		t.Errorf("hooks state %v", a.state.diag.hooks)
-	}
-	if !a.state.diag.codexDetected {
-		t.Error("the Codex directory was not detected")
-	}
-	lines := strings.Join([]string{
-		a.state.diag.versionLine(chinese),
-		a.state.diag.pluginLine(chinese),
-		a.state.diag.codexLine(chinese),
-		a.state.diag.lastEventLine(chinese),
-	}, "\n")
-	for _, want := range []string{
-		"OpenCode 版本：2.2.5",
-		"插件文件：存在，但不是 CueDex 写的",
-		"Codex：目录已找到，未安装 Stop 钩子",
-		"最近一次事件：14:32:07（OpenCode）",
-	} {
-		if !strings.Contains(lines, want) {
-			t.Errorf("diagnostics do not show %q:\n%s", want, lines)
-		}
-	}
-}
-
-func TestPanelShowsDiagnosticsInItsLanguage(t *testing.T) {
+// The panel keeps one line per integration and nothing else: versions and
+// event times belong in the docs, not in the window.
+func TestIntegrationsShowAOneLineState(t *testing.T) {
 	a := &App{prefs: prefs.Default()}
-	a.state.applyGeneral(prefs.General{Language: prefs.LanguageEnglish, Enabled: true}, time.Now())
-	a.state.diag.plugin = pluginOurs
-	a.state.diag.codexDetected = true
-	a.state.diag.hooks = hooksOurs
+	a.state.applyGeneral(prefs.Default().General, time.Now())
+	a.state.codexDetected = true
+	a.state.codexInstalled = true
+	a.state.opencodeInstalled = true
 	tt := ui.NewTester(a.state.view, 820, 1400)
 
-	for _, want := range []string{"Diagnostics", "Plugin file: installed", "Codex: directory found, Stop hook installed"} {
-		if !tt.HasText(want) {
-			t.Fatalf("%q missing from %q", want, tt.Texts())
-		}
+	if !tt.HasText("已安装") {
+		t.Fatalf("texts %q", tt.Texts())
 	}
-	if tt.HasText("诊断") {
-		t.Fatalf("Chinese diagnostics are still shown: %q", tt.Texts())
+	if tt.HasText("诊断") || tt.HasText("插件文件") || tt.HasText("最近一次事件") {
+		t.Fatalf("the diagnostics block is still there: %q", tt.Texts())
 	}
 }
 

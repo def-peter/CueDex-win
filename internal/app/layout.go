@@ -87,16 +87,16 @@ func paletteFor(base *ui.Theme) palette {
 	return p
 }
 
-// pageWidth is the measure every page draws to: 600 DIPs, centred in the 720
+// pageWidth is the measure every page draws to: 560 DIPs, centred in the 660
 // DIP window. A row that runs the full window reads as a table; at this width
 // the label and its control stay one glance apart.
-const pageWidth = 600
+const pageWidth = 560
 
 // page is the frame every tab draws into: the light page, one centred column.
 func (p palette) pageFrame(c *ui.Context, fn func()) {
 	ui.Scroll(c).Grow(1).Background(p.page).Children(func() {
 		ui.Row(c).FillWidth().Justify(ui.Center).Children(func() {
-			ui.Column(c).Width(pageWidth).Padding(26, 0, 24).Children(fn)
+			ui.Column(c).Width(pageWidth).Padding(22, 0, 18).Children(fn)
 		})
 	})
 }
@@ -113,7 +113,7 @@ func (p palette) pageTitle(c *ui.Context, s string) ui.Element {
 func (p palette) group(c *ui.Context, label string, fn func()) {
 	if label != "" {
 		ui.Text(c, label).FontSize(12).FontWeight(600).TextColor(p.faint).
-			Padding(14, 2, 7, 2)
+			Padding(12, 2, 6, 2)
 	}
 	ui.Column(c).FillWidth().Background(p.card).Border(1, p.hair).Radius(10).
 		Clip().Children(fn)
@@ -122,7 +122,7 @@ func (p palette) group(c *ui.Context, label string, fn func()) {
 // row is one line of a group: its label, an optional line under it, and the
 // control at the right edge.
 func (p palette) row(c *ui.Context, label, hint string, control func()) {
-	ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(16).Padding(11, 14).
+	ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(16).Padding(9, 14).
 		Children(func() {
 			ui.Column(c).Grow(1).Children(func() {
 				if label != "" {

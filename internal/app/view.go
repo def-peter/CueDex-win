@@ -82,9 +82,9 @@ type settings struct {
 	codexDisplay    displaySettings
 	opencodeDisplay displaySettings
 
-	cueCount   int
-	lastCue    time.Time
-	lastSource events.Source
+	// cueCount counts the cues the player has drawn. Nothing shows it; the
+	// tests use it to prove a preview is not a cue.
+	cueCount int
 	// problem is why cues cannot arrive, empty when they can.
 	problem problem
 	// saveProblem is why the preferences could not be written.
@@ -97,10 +97,6 @@ type settings struct {
 	opencodeInstalled bool
 	opencodeVersion   string
 	opencodeProblem   problem
-
-	// diag is the last section's snapshot of both integrations and the event
-	// stream.
-	diag diagnostic
 
 	codexSound    soundSettings
 	opencodeSound soundSettings
@@ -412,8 +408,8 @@ func recordingValue(label string, t wording) string {
 	return recordings.DefaultID
 }
 
-// setEnabled keeps the switch and the slider coherent: off writes zero volume
-// but remembers the last level, and on restores it.
+// setEnabled keeps the switch and the stored level coherent: off writes zero
+// volume but remembers the last level, and on restores it.
 func (s *soundSettings) setEnabled() {
 	if s.enabled {
 		if s.volume <= 0 {
@@ -428,16 +424,6 @@ func (s *soundSettings) setEnabled() {
 		s.lastVolume = s.volume
 	}
 	s.volume = 0
-}
-
-// setVolume follows the slider, which is also a mute switch at zero.
-func (s *soundSettings) setVolume() {
-	if s.volume > 0 {
-		s.lastVolume = s.volume
-		s.enabled = true
-		return
-	}
-	s.enabled = false
 }
 
 // applySound fills the panel from the saved choices.
@@ -595,7 +581,8 @@ func (s *settings) speechFor(source events.Source) *speechSettings {
 	return &s.codexSpeech
 }
 
-// status is the line under the title: what the app is doing right now.
+// status is the line under the title, and only when there is something to say:
+// while the app simply waits, the page says nothing.
 func (s *settings) status(t wording, now time.Time) string {
 	switch {
 	case !s.enabled:
@@ -606,14 +593,8 @@ func (s *settings) status(t wording, now time.Time) string {
 		return t.Paused
 	case s.quietAt(now):
 		return t.Quiet
-	case s.cueCount > 0:
-		source := ""
-		if s.lastSource != "" {
-			source = s.lastSource.Label()
-		}
-		return t.lastCue(s.lastCue, source, s.cueCount)
 	}
-	return t.Idle
+	return ""
 }
 
 func (s *settings) view(c *ui.Context) {
@@ -652,15 +633,17 @@ func (s *settings) view(c *ui.Context) {
 func (s *settings) generalPage(c *ui.Context, p palette, t wording, now time.Time) {
 	p.pageFrame(c, func() {
 		p.pageTitle(c, t.General)
-		ui.Box(c).Height(6)
-		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-			ui.Box(c).Size(6, 6).Radius(3).Background(p.accent)
-			ui.Text(c, s.status(t, now)).FontSize(12).TextColor(p.muted)
-		})
+		if status := s.status(t, now); status != "" {
+			ui.Box(c).Height(4)
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+				ui.Box(c).Size(6, 6).Radius(3).Background(p.accent)
+				ui.Text(c, status).FontSize(12).TextColor(p.muted)
+			})
+		}
 		if !s.saveProblem.empty() {
 			p.note(c, s.saveProblem.text(t))
 		}
-		ui.Box(c).Height(14)
+		ui.Box(c).Height(12)
 
 		p.group(c, "", func() {
 			p.row(c, t.Master, "", func() {
@@ -671,7 +654,7 @@ func (s *settings) generalPage(c *ui.Context, p palette, t wording, now time.Tim
 				})
 			})
 			p.rule(c)
-			p.row(c, t.Autostart, t.AutostartHint, func() {
+			p.row(c, t.Autostart, "", func() {
 				ui.Switch(c, &s.openAtLogin).Label(t.Autostart).OnChange(func() {
 					if s.onToggleOpenAtLogin != nil {
 						s.onToggleOpenAtLogin()
@@ -692,8 +675,8 @@ func (s *settings) generalPage(c *ui.Context, p palette, t wording, now time.Tim
 			p.footnote(c, s.autostartProblem.text(t))
 		}
 
-		ui.Box(c).Height(16)
-		p.group(c, t.Pause, func() {
+		ui.Box(c).Height(12)
+		p.group(c, "", func() {
 			ui.Row(c).FillWidth().Padding(11, 14).Wrap().Gap(8).Children(func() {
 				label := t.PauseCues
 				if s.paused {
@@ -709,7 +692,6 @@ func (s *settings) generalPage(c *ui.Context, p palette, t wording, now time.Tim
 					{t.Pause15, 15 * time.Minute},
 					{t.Pause1h, time.Hour},
 					{t.Pause4h, 4 * time.Hour},
-					{t.PauseUntil, 0},
 				} {
 					span := choice.span
 					if ui.Button(c, choice.label).Clicked() && s.onPauseFor != nil {
@@ -722,7 +704,7 @@ func (s *settings) generalPage(c *ui.Context, p palette, t wording, now time.Tim
 			p.footnote(c, fmt.Sprintf(t.PausedFor, shortDuration(s.pauseRemaining)))
 		}
 
-		ui.Box(c).Height(16)
+		ui.Box(c).Height(12)
 		p.group(c, "", func() {
 			p.row(c, t.QuietTitle, "", func() {
 				ui.Switch(c, &s.quietEnabled).Label(t.QuietTitle).OnChange(func() {
@@ -751,13 +733,9 @@ func (s *settings) generalPage(c *ui.Context, p palette, t wording, now time.Tim
 				})
 			})
 		})
-		p.footnote(c, t.QuietHint)
 
-		ui.Box(c).Height(16)
+		ui.Box(c).Height(12)
 		s.integrationSection(c, p, t)
-
-		ui.Box(c).Height(16)
-		s.diagnosticSection(c, p, t)
 	})
 }
 
@@ -786,7 +764,7 @@ func (s *settings) cuesPage(c *ui.Context, p palette, t wording) {
 		ui.Box(c).Height(14)
 		c.Key("cue-pane")
 		p.segmented(c, &s.pane, "", 240, true, nil, t.Glow, t.SoundPane)
-		ui.Box(c).Height(16)
+		ui.Box(c).Height(12)
 		source := s.sourceEvent()
 		if s.pane == paneSound {
 			c.Key("sound-pane")
@@ -823,7 +801,7 @@ func (s *settings) glowPane(c *ui.Context, p palette, t wording, source events.S
 		})
 	})
 
-	ui.Box(c).Height(16)
+	ui.Box(c).Height(12)
 	p.group(c, t.Appearance, func() {
 		// 单色呼吸 is one colour; 双色交替闪烁 is a pair, and shows both.
 		if flash {
@@ -843,11 +821,8 @@ func (s *settings) glowPane(c *ui.Context, p palette, t wording, source events.S
 			})
 		}
 	})
-	if flash {
-		p.footnote(c, t.FlashHint)
-	}
 
-	ui.Box(c).Height(16)
+	ui.Box(c).Height(12)
 	ui.Row(c).Children(func() {
 		// The button stands on the page, not in a row, so it sets its own
 		// height; otherwise it collapses to its text.
@@ -856,8 +831,6 @@ func (s *settings) glowPane(c *ui.Context, p palette, t wording, source events.S
 			s.onPreviewGlow(source)
 		}
 	})
-	ui.Box(c).Height(10)
-	p.note(c, t.PreviewNote)
 }
 
 // colourRow is a colour well and the hex it holds. The well opens MyGo's
@@ -907,19 +880,6 @@ func (s *settings) soundPane(c *ui.Context, p palette, t wording, source events.
 				s.onPreviewSound(source)
 			}
 		})
-		p.rule(c)
-		p.row(c, t.Volume, "", func() {
-			ui.Row(c).Width(300).Gap(10).AlignItems(ui.Center).
-				Disabled(!controls.enabled).Children(func() {
-				ui.Slider(c, &controls.volume, 0, 100).Label(t.Volume).Grow(1).
-					OnChange(func() {
-						controls.setVolume()
-						changed()
-					})
-				ui.Text(c, fmt.Sprintf("%d%%", int(math.Round(controls.volume)))).
-					FontSize(13).TextColor(p.ink).Width(40)
-			})
-		})
 		if !s.soundProblem.empty() {
 			p.rule(c)
 			p.row(c, s.soundProblem.text(t), "", func() {})
@@ -927,11 +887,9 @@ func (s *settings) soundPane(c *ui.Context, p palette, t wording, source events.
 	})
 
 	if s.speechLoaded {
-		ui.Box(c).Height(16)
+		ui.Box(c).Height(12)
 		s.speechPane(c, p, t, source)
 	}
-	ui.Box(c).Height(16)
-	p.note(c, t.PreviewNote)
 }
 
 // speechPane edits the selected producer's announcement: a bundled clip, or
@@ -986,7 +944,6 @@ func (s *settings) speechPane(c *ui.Context, p palette, t wording, source events
 			})
 		}
 	})
-	p.footnote(c, t.SpeechHint)
 	if speech.mode == speechSystem && s.speechLoaded && len(s.speechVoices) == 0 {
 		p.footnote(c, t.SpeechNoVoice)
 	}
@@ -997,26 +954,28 @@ func (s *settings) speechPane(c *ui.Context, p palette, t wording, source events
 
 // aboutPage names the product, its version and what it does.
 func (s *settings) aboutPage(c *ui.Context, p palette, t wording) {
-	// Nothing here scrolls: the whole page is one mark, centered in the
-	// window as the Mac's About panel is.
+	// Nothing here scrolls: the whole page is one mark. The trailing spacer is
+	// the tab bar's height, so the mark centres in the window rather than in
+	// the page area under the tabs.
 	ui.Column(c).Grow(1).FillWidth().Background(p.page).Justify(ui.Center).
 		AlignItems(ui.Center).Padding(40, 0).Children(func() {
 		// Wide enough for the one-line description at 13px, so it wraps on a
 		// comma rather than mid-phrase.
-		ui.Column(c).Width(540).AlignItems(ui.Center).Children(func() {
+		ui.Column(c).Width(520).AlignItems(ui.Center).Children(func() {
 			if icon := aboutIcon(); icon != nil {
 				ui.Image(c, icon).Size(64, 64)
 			}
-			ui.Box(c).Height(24)
+			ui.Box(c).Height(20)
 			ui.Text(c, t.Product).FontSize(28).FontWeight(700).TextColor(p.ink).
 				TextAlign(ui.Center)
 			ui.Box(c).Height(2)
 			ui.Text(c, s.versionLine(t)).FontSize(12).TextColor(p.muted).
 				TextAlign(ui.Center)
-			ui.Box(c).Height(22)
+			ui.Box(c).Height(18)
 			ui.Text(c, t.AboutTagline).FontSize(13).TextColor(p.ink).
 				TextAlign(ui.Center)
 		})
+		ui.Box(c).Height(48)
 	})
 }
 
@@ -1054,24 +1013,6 @@ func (s *settings) integrationSection(c *ui.Context, p palette, t wording) {
 			}
 		})
 	})
-}
-
-// diagnosticSection says what the app found, so a failing install has
-// somewhere to be looked at after the notification is gone.
-func (s *settings) diagnosticSection(c *ui.Context, p palette, t wording) {
-	p.group(c, t.Diagnostics, func() {
-		ui.Column(c).FillWidth().Padding(11, 14).Gap(3).Children(func() {
-			for _, line := range []string{
-				s.diag.versionLine(t),
-				s.diag.pluginLine(t),
-				s.diag.codexLine(t),
-				s.diag.lastEventLine(t),
-			} {
-				ui.Text(c, line).FontSize(12).TextColor(p.muted)
-			}
-		})
-	})
-	p.footnote(c, t.DiagHint)
 }
 
 // codexDetail is the line under the Codex button: what is installed, or why it

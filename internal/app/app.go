@@ -196,11 +196,6 @@ func (a *App) Ready() {
 	// nothing.
 	watch, err := events.Watch(a.dir.Events(), func(e events.Event) {
 		mygo.RunOnMain(func() {
-			// The diagnostics section reports the newest completion even when
-			// the user has cues switched off: knowing the plugin works is the
-			// point of that section.
-			a.state.diag.lastEvent = time.Now()
-			a.state.diag.lastSource = e.Source
 			if a.prefs.Cues(e.Source, time.Now()) {
 				a.player.Submit(e)
 			}
@@ -294,8 +289,8 @@ func (a *App) rebuildTray() {
 func (a *App) newWindow() *mygo.Window {
 	w := mygo.NewWindow(mygo.WindowOptions{
 		Title:         a.state.text().SettingsTitle,
-		Width:         720,
-		Height:        640,
+		Width:         660,
+		Height:        600,
 		DisableResize: true,
 		Content:       ui.View(a.state.view),
 	})
@@ -325,8 +320,6 @@ func (a *App) cueStart(source events.Source) {
 		a.stopAnnouncement()
 	}
 	a.state.cueCount++
-	a.state.lastCue = time.Now()
-	a.state.lastSource = source
 	if a.overlay != nil {
 		a.overlay.Show(a.sourceCue(source))
 	}
@@ -786,7 +779,6 @@ func (a *App) refreshCodex() {
 	if err != nil {
 		a.state.codexProblem = codexProblem(err)
 	}
-	a.refreshDiagnostics()
 }
 
 // toggleCodex installs or removes the Stop hook the way the panel's button
@@ -827,7 +819,6 @@ func (a *App) refreshOpenCode() {
 	if err != nil {
 		a.state.opencodeProblem = openCodeProblem(err)
 	}
-	a.refreshDiagnostics()
 }
 
 // toggleOpenCode installs or removes the local plugin the way the panel's
