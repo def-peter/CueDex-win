@@ -3,12 +3,8 @@
 package app
 
 import (
-	"bytes"
+	_ "embed"
 	"errors"
-	"image"
-	"image/color"
-	"image/draw"
-	"image/png"
 	"log"
 	"time"
 
@@ -283,6 +279,9 @@ func (a *App) newWindow() *mygo.Window {
 		SkipTaskbar:       true,
 		Content:           ui.View(a.state.view),
 	})
+	if err := w.SetIcon(trayIcon()); err != nil {
+		log.Printf("cuedex: window icon: %v", err)
+	}
 	// Losing focus closes the panel, as a tray popover does, and gives its
 	// memory back.
 	w.OnBlur(func() {
@@ -696,21 +695,12 @@ func (a *App) sourceCue(source events.Source) overlay.Cue {
 	}
 }
 
-// trayIcon draws the product: four glowing edges around an empty middle.
+// officialTrayIcon is the unchanged CueDex app icon from the macOS asset catalog.
+//
+//go:embed icon_32x32.png
+var officialTrayIcon []byte
+
+// trayIcon returns the embedded official artwork without a runtime file lookup.
 func trayIcon() []byte {
-	img := image.NewNRGBA(image.Rect(0, 0, 32, 32))
-	glow := color.NRGBA{R: 94, G: 234, B: 212, A: 255}
-	for _, r := range []image.Rectangle{
-		image.Rect(2, 2, 30, 5),
-		image.Rect(2, 27, 30, 30),
-		image.Rect(2, 5, 5, 27),
-		image.Rect(27, 5, 30, 27),
-	} {
-		draw.Draw(img, r, image.NewUniform(glow), image.Point{}, draw.Src)
-	}
-	var b bytes.Buffer
-	if err := png.Encode(&b, img); err != nil {
-		return nil
-	}
-	return b.Bytes()
+	return officialTrayIcon
 }
