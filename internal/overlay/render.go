@@ -35,84 +35,179 @@ func edgeRect(bounds rect, edge Edge, thickness int32) rect {
 	}
 }
 
-// falloff says how opaque a pixel is at distance d from the glowing edge,
-// between 0 and thickness. It is a smooth curve rather than a line: a glow
-// that fades linearly reads as a flat bar with a hard inner edge.
-func falloff(d, thickness float64) float64 {
-	if d <= 0 {
-		return 1
-	}
-	if d >= thickness {
+// glowMetrics is one display's ring in its own physical pixels: how wide the
+// gradient is, and the hairline the mac app strokes around the screen.
+type glowMetrics struct {
+	width  float64
+	inset  float64
+	radius float64
+	stroke float64
+}
+
+// glowBand is one band's place on its display, plus the ring's metrics. It is
+// what fillBand needs, so a test can paint a band that matches the overlay's
+// geometry without a window.
+type glowBand struct {
+	width, height      int
+	offsetX, offsetY   int
+	displayW, displayH int
+	edge               Edge
+	metrics            glowMetrics
+}
+
+// glowProfile is the mac app's gradient: half opacity at the screen edge, 0.18
+// at 42% of the width, clear at the inner edge. One smoothstep from full
+// opacity reads as a solid bar with a soft inner edge; two stops read as light.
+func glowProfile(d, width float64) float64 {
+	if width <= 0 || d >= width {
 		return 0
 	}
-	x := 1 - d/thickness
-	return x * x * (3 - 2*x) // smoothstep
+	if d <= 0 {
+		return 0.5
+	}
+	x := d / width
+	if x <= 0.42 {
+		return 0.5 + (0.18-0.5)*(x/0.42)
+	}
+	return 0.18 * (1 - (x-0.42)/0.58)
+}
+
+// hairlineAlpha is the 2.5 pt stroke the mac app draws 2 pt inside the edge,
+// on a rounded rectangle. It is what makes the four bands read as one ring:
+// the stroke runs unbroken around the corners, where four straight gradients
+// would otherwise stop dead and leave a seam.
+func hairlineAlpha(dx, dy float64, m glowMetrics) float64 {
+	half := m.stroke / 2
+	if half <= 0 {
+		return 0
+	}
+	// Signed distance to the inset rounded rectangle, in physical pixels.
+	qx := m.inset + m.radius - dx
+	qy := m.inset + m.radius - dy
+	sd := math.Hypot(math.Max(qx, 0), math.Max(qy, 0)) +
+		math.Min(math.Max(qx, qy), 0) - m.radius
+	// A one-pixel knee, so the stroke is not a staircase.
+	knee := (half - math.Abs(sd))
+	if knee <= 0 {
+		return 0
+	}
+	if knee > 1 {
+		knee = 1
+	}
+	return 0.62 * knee
+}
+
+// ringTable is every alpha the band can show, indexed by the pixel's distance
+// to the nearest vertical edge and to the nearest horizontal one, both capped
+// at the band's width. The ring is symmetric, so those two distances are all a
+// pixel's opacity depends on; sharing one table is also what keeps the corners
+// continuous: the last row of a horizontal band reads the same entry as the
+// first row of the vertical band below it.
+func ringTable(m glowMetrics, alpha uint8) ([]byte, int) {
+	n := int(math.Ceil(m.width)) + 1
+	if n < 2 {
+		n = 2
+	}
+	table := make([]byte, n*n)
+	for i := 0; i < n; i++ {
+		glowX := glowProfile(float64(i), m.width)
+		for j := 0; j < n; j++ {
+			glowY := glowProfile(float64(j), m.width)
+			band := 1 - (1-glowX)*(1-glowY)
+			hair := hairlineAlpha(float64(i), float64(j), m)
+			a := 1 - (1-band)*(1-hair)
+			if a < 0 {
+				a = 0
+			}
+			if a > 1 {
+				a = 1
+			}
+			table[i*n+j] = byte(a * float64(alpha))
+		}
+	}
+	return table, n
+}
+
+// edgeIndex is a pixel's distance to the nearer of two opposite edges, capped
+// at the last table entry.
+func edgeIndex(p, size, n int) int {
+	d := p
+	if other := size - 1 - p; other < d {
+		d = other
+	}
+	if d < 0 {
+		d = 0
+	}
+	if d >= n {
+		d = n - 1
+	}
+	return d
 }
 
 // fillBand writes a band's premultiplied BGRA pixels into dst, which must hold
-// w*h*4 bytes. The bitmap is premultiplied because UpdateLayeredWindow blends it
-// with AC_SRC_ALPHA.
-//
-// The gradient only varies with the distance from the anchored edge, so the
-// colour is one lookup per row (or column) rather than a float computation per
-// pixel. Filling a band is then a memory write, which is what keeps the start
-// of a cue short.
-func fillBand(dst []byte, w, h int, edge Edge, c color.NRGBA, thickness float64) {
-	steps := int(thickness) + 1
-	if steps < 2 {
-		steps = 2
-	}
-	if steps > 4096 {
-		steps = 4096
-	}
-	alphas := make([]byte, steps)
+// g.width*g.height*4 bytes. The bitmap is premultiplied because
+// UpdateLayeredWindow blends it with AC_SRC_ALPHA.
+func fillBand(dst []byte, g glowBand, c color.NRGBA) {
+	table, n := ringTable(g.metrics, c.A)
 	var premultiplied [256][4]byte
 	for a := 0; a < 256; a++ {
-		alpha := float64(a)
+		unit := float64(a) / 255
 		premultiplied[a] = [4]byte{
-			byte(float64(c.B) * alpha / 255), // B
-			byte(float64(c.G) * alpha / 255), // G
-			byte(float64(c.R) * alpha / 255), // R
+			byte(float64(c.B) * unit), // B
+			byte(float64(c.G) * unit), // G
+			byte(float64(c.R) * unit), // R
 			byte(a),
 		}
 	}
-	for i := 0; i < steps; i++ {
-		alphas[i] = byte(float64(c.A) * falloff(float64(i), thickness))
+
+	columns := make([]int, g.width)
+	for x := range columns {
+		columns[x] = edgeIndex(g.offsetX+x, g.displayW, n)
 	}
-	// A distance beyond the table is fully faded out.
-	at := func(d int) byte {
-		if d < 0 || d >= steps {
-			return 0
-		}
-		return alphas[d]
+	rows := make([]int, g.height)
+	for y := range rows {
+		rows[y] = edgeIndex(g.offsetY+y, g.displayH, n)
 	}
 
-	if edge == EdgeTop || edge == EdgeBottom {
-		for y := 0; y < h; y++ {
-			d := y
-			if edge == EdgeBottom {
-				d = h - 1 - y
+	stride := g.width * 4
+	horizontal := g.edge == EdgeTop || g.edge == EdgeBottom
+	if !horizontal {
+		// A vertical band sits away from the corners entirely, so its
+		// columns are all it varies by; the table already holds the rest.
+		for y := 0; y < g.height; y++ {
+			row := dst[y*stride:]
+			dy := rows[y]
+			for x := 0; x < g.width; x++ {
+				copy(row[x*4:x*4+4], premultiplied[table[columns[x]*n+dy]][:])
 			}
-			pixel := premultiplied[at(d)]
-			row := dst[y*w*4 : (y+1)*w*4]
-			fillRun(row, pixel)
 		}
 		return
 	}
-	for x := 0; x < w; x++ {
-		d := x
-		if edge == EdgeRight {
-			d = w - 1 - x
+
+	// A horizontal band is wide: everything between the table's ends is one
+	// constant pixel per row, which is most of the bitmap.
+	left := n
+	if left > g.width {
+		left = g.width
+	}
+	right := g.width - n
+	if right < left {
+		right = left
+	}
+	for y := 0; y < g.height; y++ {
+		row := dst[y*stride:]
+		dy := rows[y]
+		for x := 0; x < left; x++ {
+			copy(row[x*4:x*4+4], premultiplied[table[columns[x]*n+dy]][:])
 		}
-		pixel := premultiplied[at(d)]
-		for y := 0; y < h; y++ {
-			i := (y*w + x) * 4
-			copy(dst[i:i+4], pixel[:])
+		fillRun(row[left*4:right*4], premultiplied[table[columns[left-1]*n+dy]])
+		for x := right; x < g.width; x++ {
+			copy(row[x*4:x*4+4], premultiplied[table[columns[x]*n+dy]][:])
 		}
 	}
 }
 
-// fillRun repeats one pixel across a contiguous row. Doubling the filled part
+// fillRun repeats one pixel across a contiguous run. Doubling the filled part
 // reaches the end in log2(len) copies instead of one copy per pixel.
 func fillRun(dst []byte, pixel [4]byte) {
 	n := copy(dst, pixel[:])
@@ -149,13 +244,17 @@ func breathe(elapsed, duration float64) float64 {
 
 // sample returns how strongly the cue is lit and how the two colours share
 // that light at elapsed. Breathing uses one colour and no second one; the
-// flash blinks them one after the other inside a slow fade.
+// flash blinks them one after the other inside a single three-second fade.
 func sample(animation Animation, elapsed time.Duration) (envelope, primary, secondary float64) {
 	if animation != AlternatingFlash {
 		return breathe(elapsed.Seconds(), CueDuration.Seconds()), 1, 0
 	}
+	// Two animations layered the way the mac app layers them: the colours
+	// blink on a 950 ms cycle, while the envelope fades in once at the start
+	// and out once at the end. Fading the envelope per blink would make every
+	// other blink dimmer than the one before it.
 	phase := flashPhase(elapsed)
-	return sampleFrames(flashEnvelope, phase),
+	return sampleFrames(flashEnvelope, elapsed.Seconds()/CueDuration.Seconds()),
 		sampleFrames(primaryFlashes, phase),
 		sampleFrames(secondaryFlashes, phase)
 }

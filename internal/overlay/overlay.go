@@ -10,6 +10,7 @@ package overlay
 import (
 	"fmt"
 	"image/color"
+	"math"
 	"runtime"
 	"sync"
 	"syscall"
@@ -18,16 +19,40 @@ import (
 )
 
 const (
-	// bandThickness is the glow's width at 96 DPI, in physical pixels. A
-	// display at another scale gets it multiplied by its DPI, so the glow
-	// looks the same width everywhere.
-	bandThickness = 64
-	// frameInterval is 33 ms: every frame re-blends the whole band, and at
-	// 30 frames a second the cue is smooth while staying inside the CPU
-	// budget in HANDOFF.md. Measured on this machine, 60 fps costs about
-	// twice as much for no visible gain.
+	// The mac app sizes its glow at 8.5% of the screen's shorter side, clamped
+	// to 54-116 pt, and strokes a 2.5 pt rounded border 2 pt inside the edge
+	// with a 22 pt corner radius. Matching those numbers is what makes the two
+	// builds look the same: the glow is mostly the gradient's width and the
+	// hairline that ties the four bands together.
+	minGlowWidth   = 54.0
+	maxGlowWidth   = 116.0
+	glowFraction   = 0.085
+	hairlineInset  = 2.0
+	hairlineRadius = 22.0
+	hairlineWidth  = 2.5
+	// frameInterval is 33 ms: every frame changes only the window's global
+	// alpha, and at 30 frames a second the cue is smooth while staying inside
+	// the CPU budget in HANDOFF.md. Measured on this machine, 60 fps costs
+	// about twice as much for no visible gain.
 	frameInterval = 33 // ms
 )
+
+// metricsFor reads one display's ring geometry, in its own physical pixels.
+// The glow is measured in points so both displays get the same visual width.
+func metricsFor(bounds rect, dpi uint32) glowMetrics {
+	scale := 1.0
+	if dpi != 0 {
+		scale = float64(dpi) / 96
+	}
+	short := math.Min(float64(bounds.width()), float64(bounds.height())) / scale
+	width := math.Min(math.Max(short*glowFraction, minGlowWidth), maxGlowWidth)
+	return glowMetrics{
+		width:  width * scale,
+		inset:  hairlineInset * scale,
+		radius: hairlineRadius * scale,
+		stroke: hairlineWidth * scale,
+	}
+}
 
 // CueDuration is how long one cue's animation lasts, fade out included. The
 // player keeps its queue in step with it.
@@ -89,11 +114,8 @@ type Cue struct {
 // window keeps its own copy: a 3-second cue then holds a few megabytes of
 // surfaces instead of the tens a resident bitmap per band would cost.
 type band struct {
-	hwnd      uintptr
-	width     int32
-	height    int32
-	edge      Edge
-	thickness int32
+	hwnd uintptr
+	glow glowBand
 }
 
 // display is one monitor's bands. Each edge has two windows, one per cue
@@ -258,12 +280,13 @@ func (o *Overlay) buildDisplays() {
 	o.destroyDisplays()
 	o.signature = ""
 	for _, m := range monitors() {
-		t := thicknessFor(m.dpi)
+		metrics := metricsFor(m.bounds, m.dpi)
+		t := int32(math.Round(metrics.width))
 		d := display{bounds: m.bounds, dpi: m.dpi}
 		for _, edge := range []Edge{EdgeTop, EdgeBottom, EdgeLeft, EdgeRight} {
 			r := edgeRect(m.bounds, edge, t)
-			d.primary = append(d.primary, o.newBand(r, edge, t))
-			d.secondary = append(d.secondary, o.newBand(r, edge, t))
+			d.primary = append(d.primary, o.newBand(r, m.bounds, edge, metrics))
+			d.secondary = append(d.secondary, o.newBand(r, m.bounds, edge, metrics))
 		}
 		o.displays = append(o.displays, d)
 		o.signature += signaturePart(m)
@@ -275,18 +298,6 @@ func (o *Overlay) buildDisplays() {
 		o.messageWindow = 0
 	}
 	o.mu.Unlock()
-}
-
-// thicknessFor reads the band width at a display's scale.
-func thicknessFor(dpi uint32) int32 {
-	if dpi == 0 {
-		dpi = 96
-	}
-	t := int32(bandThickness * int(dpi) / 96)
-	if t < bandThickness/2 {
-		t = bandThickness / 2
-	}
-	return t
 }
 
 func signaturePart(m monitor) string {
@@ -309,7 +320,7 @@ func (o *Overlay) syncDisplays() {
 	o.buildDisplays()
 }
 
-func (o *Overlay) newBand(r rect, edge Edge, thickness int32) *band {
+func (o *Overlay) newBand(r rect, bounds rect, edge Edge, metrics glowMetrics) *band {
 	hwnd, _, _ := procCreateWindowExW.Call(
 		wsExLayered|wsExTransparent|wsExToolWindow|wsExTopmost|wsExNoActivate,
 		uintptr(unsafe.Pointer(utf16("CueDexOverlay"))),
@@ -324,11 +335,17 @@ func (o *Overlay) newBand(r rect, edge Edge, thickness int32) *band {
 	procSetWindowPos.Call(hwnd, hwndTopmost, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
 
 	return &band{
-		hwnd:      hwnd,
-		width:     r.width(),
-		height:    r.height(),
-		edge:      edge,
-		thickness: thickness,
+		hwnd: hwnd,
+		glow: glowBand{
+			width:    int(r.width()),
+			height:   int(r.height()),
+			offsetX:  int(r.Left - bounds.Left),
+			offsetY:  int(r.Top - bounds.Top),
+			displayW: int(bounds.width()),
+			displayH: int(bounds.height()),
+			edge:     edge,
+			metrics:  metrics,
+		},
 	}
 }
 
@@ -342,8 +359,8 @@ func (o *Overlay) surface(b *band, c color.NRGBA) (hdc, bitmap uintptr) {
 
 	header := bitmapInfoHeader{
 		Size:        uint32(unsafe.Sizeof(bitmapInfoHeader{})),
-		Width:       b.width,
-		Height:      -b.height, // top-down rows
+		Width:       int32(b.glow.width),
+		Height:      -int32(b.glow.height), // top-down rows
 		Planes:      1,
 		BitCount:    32,
 		Compression: biRGB,
@@ -362,8 +379,7 @@ func (o *Overlay) surface(b *band, c color.NRGBA) (hdc, bitmap uintptr) {
 	}
 	procSelectObject.Call(hdc, bitmap)
 
-	fillBand(unsafe.Slice((*byte)(bits), int(b.width)*int(b.height)*4),
-		int(b.width), int(b.height), b.edge, c, float64(b.thickness))
+	fillBand(unsafe.Slice((*byte)(bits), b.glow.width*b.glow.height*4), b.glow, c)
 	return hdc, bitmap
 }
 
@@ -503,7 +519,7 @@ func (o *Overlay) stopCue() {
 
 // upload gives a band's window the bitmap in srcDC, at the given alpha.
 func (o *Overlay) upload(b *band, srcDC uintptr, alpha byte) {
-	sz := size{CX: b.width, CY: b.height}
+	sz := size{CX: int32(b.glow.width), CY: int32(b.glow.height)}
 	src := point{}
 	blend := blendFunction{
 		BlendOp:             acSrcOver,
@@ -523,7 +539,7 @@ func (o *Overlay) upload(b *band, srcDC uintptr, alpha byte) {
 // so no source is given; only a single pixel is marked dirty, so the frame costs
 // a call rather than a copy of the whole band.
 func (o *Overlay) commit(b *band, alpha byte) {
-	sz := size{CX: b.width, CY: b.height}
+	sz := size{CX: int32(b.glow.width), CY: int32(b.glow.height)}
 	blend := blendFunction{
 		BlendOp:             acSrcOver,
 		SourceConstantAlpha: alpha,

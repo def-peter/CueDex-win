@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"image/color"
+	"math"
 	"syscall"
 	"testing"
 	"time"
@@ -80,7 +81,7 @@ func TestBandsCoverEveryDisplayAtItsOwnScale(t *testing.T) {
 	// Each edge has one window per cue colour, and every one of them has to sit
 	// exactly on the rectangle the geometry asks for, in physical pixels.
 	for _, m := range displays {
-		thickness := thicknessFor(m.dpi)
+		thickness := int32(math.Round(metricsFor(m.bounds, m.dpi).width))
 		for _, edge := range []Edge{EdgeTop, EdgeBottom, EdgeLeft, EdgeRight} {
 			want := edgeRect(m.bounds, edge, thickness)
 			seen := 0

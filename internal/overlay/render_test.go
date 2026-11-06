@@ -7,59 +7,122 @@ import (
 	"time"
 )
 
-// bandPixels renders one band into a fresh slice, the way the overlay fills its
-// bitmap.
-func bandPixels(w, h int, edge Edge, c color.NRGBA, thickness float64) []byte {
-	out := make([]byte, w*h*4)
-	fillBand(out, w, h, edge, c, thickness)
+var white = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+
+// ringBand builds one edge's shape the way the overlay does, so the tests paint
+// the same geometry the windows show.
+func ringBand(bounds rect, edge Edge, thickness, inset, radius, stroke float64) glowBand {
+	t := int32(math.Round(thickness))
+	r := edgeRect(bounds, edge, t)
+	return glowBand{
+		width:    int(r.width()),
+		height:   int(r.height()),
+		offsetX:  int(r.Left - bounds.Left),
+		offsetY:  int(r.Top - bounds.Top),
+		displayW: int(bounds.width()),
+		displayH: int(bounds.height()),
+		edge:     edge,
+		metrics:  glowMetrics{width: thickness, inset: inset, radius: radius, stroke: stroke},
+	}
+}
+
+func paint(g glowBand, c color.NRGBA) []byte {
+	out := make([]byte, g.width*g.height*4)
+	fillBand(out, g, c)
 	return out
 }
 
-func TestFalloffIsOpaqueAtTheEdgeAndClearInside(t *testing.T) {
-	if got := falloff(0, 64); got != 1 {
-		t.Fatalf("falloff at the edge = %v, want 1", got)
+// alpha is the opacity of one pixel of a painted band.
+func alpha(pix []byte, width, x, y int) byte { return pix[(y*width+x)*4+3] }
+
+// TestGlowProfileMatchesTheMacGradient pins the two stops the mac app uses:
+// half opacity at the screen edge, 0.18 at 42% of the width, nothing inside.
+// A profile that starts at full opacity is what reads as a solid bar.
+func TestGlowProfileMatchesTheMacGradient(t *testing.T) {
+	const width = 100.0
+	for _, tc := range []struct {
+		d, want float64
+	}{
+		{0, 0.5},
+		{42, 0.18},
+		{width, 0},
+		{width + 1, 0},
+	} {
+		if got := glowProfile(tc.d, width); math.Abs(got-tc.want) > 1e-9 {
+			t.Errorf("glowProfile(%v) = %v, want %v", tc.d, got, tc.want)
+		}
 	}
-	if got := falloff(64, 64); got != 0 {
-		t.Fatalf("falloff at the inner edge = %v, want 0", got)
-	}
-	prev := 1.0
-	for d := 1.0; d < 64; d++ {
-		got := falloff(d, 64)
+	prev := glowProfile(0, width)
+	for d := 1.0; d <= width; d++ {
+		got := glowProfile(d, width)
 		if got < 0 || got > prev {
-			t.Fatalf("falloff(%v) = %v, not decreasing from %v", d, got, prev)
+			t.Fatalf("glowProfile(%v) = %v, not decreasing from %v", d, got, prev)
 		}
 		prev = got
 	}
 }
 
-func TestBandPixelsFadeInward(t *testing.T) {
-	c := color.NRGBA{R: 255, G: 255, B: 255, A: 255}
-	const w, h = 4, 8
-	pix := bandPixels(w, h, EdgeTop, c, 8)
-	at := func(x, y int) byte { return pix[(y*w+x)*4+3] }
+// TestBandIsHalfOpaqueAtTheEdge is the other half of the mac look: the glow is
+// translucent even at the screen border, so it lights up the desktop instead of
+// covering it.
+func TestBandIsHalfOpaqueAtTheEdge(t *testing.T) {
+	bounds := rect{0, 0, 800, 600}
+	top := paint(ringBand(bounds, EdgeTop, 56, 2, 22, 2.5), white)
+	if got := alpha(top, 800, 400, 0); math.Abs(float64(got)-127) > 1 {
+		t.Fatalf("edge alpha = %d, want 127 (half of 255)", got)
+	}
+	if got := alpha(top, 800, 400, 55); got > 8 {
+		t.Fatalf("inner edge alpha = %d, want nearly nothing", got)
+	}
+}
 
-	if at(0, 0) != 255 {
-		t.Fatalf("outer row alpha = %d, want 255", at(0, 0))
+// TestHairlineRunsAlongTheEdge checks the 2.5 pt stroke the mac app draws: it
+// is what makes the four bands read as one ring.
+func TestHairlineRunsAlongTheEdge(t *testing.T) {
+	bounds := rect{0, 0, 800, 600}
+	top := paint(ringBand(bounds, EdgeTop, 56, 2, 22, 2.5), white)
+	stroked := alpha(top, 800, 400, 2)
+	plain := alpha(top, 800, 400, 0)
+	if stroked < 180 {
+		t.Fatalf("hairline alpha = %d, want the stroke to be visible", stroked)
 	}
-	// The band is exactly as thick as the fade, so its last row is the
-	// faintest one rather than nothing at all.
-	if at(0, h-1) > 12 {
-		t.Fatalf("inner row alpha = %d, want under 12", at(0, h-1))
+	if stroked <= plain {
+		t.Fatalf("hairline %d is not brighter than the edge %d", stroked, plain)
 	}
-	if at(0, 1) >= at(0, 0) {
-		t.Fatalf("alpha did not decrease inward: %d then %d", at(0, 0), at(0, 1))
+}
+
+// TestCornersMeetWithoutASeam is the regression this shape exists for. The top
+// band owns the corner square and the vertical band starts below it; if each
+// one ramps only along its own axis the glow stops dead at the joint, which
+// reads as four bars rather than one ring.
+func TestCornersMeetWithoutASeam(t *testing.T) {
+	bounds := rect{0, 0, 800, 600}
+	const thickness = 56.0
+	top := paint(ringBand(bounds, EdgeTop, thickness, 2, 22, 2.5), white)
+	left := paint(ringBand(bounds, EdgeLeft, thickness, 2, 22, 2.5), white)
+	tall := int(thickness)
+
+	for x := 0; x < tall; x++ {
+		a := alpha(top, 800, x, tall-1)
+		b := alpha(left, tall, x, 0)
+		if diff := int(a) - int(b); diff > 3 || diff < -3 {
+			t.Fatalf("column %d: top band %d, left band %d", x, a, b)
+		}
+	}
+	// And the corner itself has to be lit, not clipped away by the hairline's
+	// rounded path.
+	if got := alpha(top, 800, 0, 0); got < 150 {
+		t.Fatalf("corner alpha = %d, want a lit corner", got)
 	}
 }
 
 func TestBandPixelsArePremultiplied(t *testing.T) {
 	c := color.NRGBA{R: 200, G: 100, B: 50, A: 255}
-	pix := bandPixels(1, 64, EdgeTop, c, 64)
-	// Row 1 is partly transparent, so every colour channel must have been
-	// scaled by the same alpha as the alpha channel.
-	a := pix[(1*1+0)*4+3]
-	b := pix[(1*1+0)*4+0]
+	pix := paint(ringBand(rect{0, 0, 800, 600}, EdgeTop, 56, 2, 22, 2.5), c)
+	a := alpha(pix, 800, 0, 20)
+	b := pix[(20*800+0)*4+0]
 	if a == 0 || a == 255 {
-		t.Fatalf("expected a partial alpha on row 1, got %d", a)
+		t.Fatalf("expected a partial alpha on row 20, got %d", a)
 	}
 	want := byte(float64(c.B) * float64(a) / 255)
 	if b != want {
@@ -107,28 +170,44 @@ func TestBreathingFollowsTheKeyframes(t *testing.T) {
 }
 
 func TestFlashAlternatesTheTwoColours(t *testing.T) {
-	// At the peak of the first blink only the primary colour is lit; at the
-	// peak of the third blink only the secondary is. The envelope stays at
-	// full strength between them, so the flash never dips while it blinks.
+	// The colours blink on a 950 ms cycle; the envelope is the cue's, fading in
+	// over the first tenth of the three seconds and out over the last. At the
+	// peak of a blink only one colour is lit, and the handover falls where
+	// neither is, so taking a set off the screen is invisible.
 	for _, tc := range []struct {
-		name                         string
-		phase                        float64
-		envelope, primary, secondary float64
+		name               string
+		elapsed            time.Duration
+		primary, secondary float64
 	}{
-		// The envelope eases in over the first tenth, so the first blink
-		// happens while the glow is still coming up.
-		{"primary peak", 0.08, 0.896, 1, 0},
-		{"handover", 0.5, 1, 0, 0},
-		{"secondary peak", 0.58, 1, 0, 1},
-		{"last secondary peak", 0.74, 1, 0, 1},
+		{"primary peak", 76 * time.Millisecond, 1, 0},
+		{"handover", 475 * time.Millisecond, 0, 0},
+		{"secondary peak", 551 * time.Millisecond, 0, 1},
+		{"last secondary peak", 703 * time.Millisecond, 0, 1},
 	} {
-		elapsed := time.Duration(tc.phase * float64(flashCyclePeriod))
-		envelope, primary, secondary := sample(AlternatingFlash, elapsed)
-		if math.Abs(envelope-tc.envelope) > 0.001 {
-			t.Errorf("%s: envelope %v, want %v", tc.name, envelope, tc.envelope)
-		}
+		_, primary, secondary := sample(AlternatingFlash, tc.elapsed)
 		if math.Abs(primary-tc.primary) > 0.001 || math.Abs(secondary-tc.secondary) > 0.001 {
 			t.Errorf("%s: colours %v/%v, want %v/%v", tc.name, primary, secondary, tc.primary, tc.secondary)
+		}
+	}
+}
+
+// TestFlashEnvelopeFollowsTheCue keeps a blink in the middle of the cue at
+// full strength: the envelope belongs to the three seconds, not to the blink.
+func TestFlashEnvelopeFollowsTheCue(t *testing.T) {
+	for _, tc := range []struct {
+		elapsed time.Duration
+		want    float64
+	}{
+		{0, 0},
+		{150 * time.Millisecond, 0.5},
+		{900 * time.Millisecond, 1},
+		{1500 * time.Millisecond, 1},
+		{2850 * time.Millisecond, 0.5},
+		{3 * time.Second, 0},
+	} {
+		envelope, _, _ := sample(AlternatingFlash, tc.elapsed)
+		if math.Abs(envelope-tc.want) > 0.01 {
+			t.Errorf("%v: envelope %v, want %v", tc.elapsed, envelope, tc.want)
 		}
 	}
 }
@@ -155,18 +234,32 @@ func TestBreathingUsesOneColour(t *testing.T) {
 	}
 }
 
-func TestThicknessGrowsWithTheDisplayScale(t *testing.T) {
-	if got := thicknessFor(96); got != bandThickness {
-		t.Fatalf("96 DPI gives %d, want %d", got, bandThickness)
+// TestGlowWidthMatchesTheMacApp pins the sizing rule: 8.5% of the shorter side
+// in points, clamped to 54-116. Two displays at different scales have to end up
+// with the same visual width, which is what the point conversion is for.
+func TestGlowWidthMatchesTheMacApp(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		bounds rect
+		dpi    uint32
+		width  float64
+	}{
+		{"150% display", rect{0, 0, 2560, 1600}, 144, 136.0},
+		{"100% display", rect{0, 0, 1920, 1080}, 96, 91.8},
+		{"small display clamps up", rect{0, 0, 800, 600}, 96, 54},
+		{"4K display clamps down", rect{0, 0, 3840, 2160}, 96, 116},
+		{"unknown DPI", rect{0, 0, 1920, 1080}, 0, 91.8},
+	} {
+		got := metricsFor(tc.bounds, tc.dpi).width
+		if math.Abs(got-tc.width) > 0.01 {
+			t.Errorf("%s: width %v, want %v", tc.name, got, tc.width)
+		}
 	}
-	if got := thicknessFor(144); got != bandThickness*3/2 {
-		t.Fatalf("150%% gives %d", got)
-	}
-	if got := thicknessFor(192); got != bandThickness*2 {
-		t.Fatalf("200%% gives %d", got)
-	}
-	if got := thicknessFor(0); got != bandThickness {
-		t.Fatalf("unknown DPI gives %d", got)
+	// The hairline scales with the display too, so the stroke is the same
+	// thickness on screen.
+	got := metricsFor(rect{0, 0, 2560, 1600}, 144)
+	if math.Abs(got.stroke-3.75) > 0.001 || math.Abs(got.radius-33) > 0.001 {
+		t.Errorf("150%% hairline = %+v", got)
 	}
 }
 
