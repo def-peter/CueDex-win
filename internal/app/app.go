@@ -179,6 +179,9 @@ func (a *App) Ready() {
 		panic(err)
 	}
 	a.tray = tray
+	// A left click opens the window, the way a background utility behaves on
+	// Windows; the menu stays on the right button.
+	tray.OnClick(a.show)
 
 	// The overlay is four layered windows on the primary display. It costs a
 	// few hundred kilobytes idle, unlike a MyGo window.
