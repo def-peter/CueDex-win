@@ -6,7 +6,6 @@ import (
 	"math"
 	"time"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"github.com/def-peter/cuedex-win/internal/events"
@@ -16,6 +15,7 @@ import (
 	"github.com/def-peter/cuedex-win/internal/recordings"
 	"github.com/def-peter/cuedex-win/internal/sound"
 	"github.com/def-peter/cuedex-win/internal/speech"
+	"github.com/def-peter/cuedex-win/internal/update"
 )
 
 // The animation picker's indexes.
@@ -98,6 +98,16 @@ type settings struct {
 	opencodeVersion   string
 	opencodeProblem   problem
 
+	// updateState is what the About page says about a newer release; the
+	// release itself is kept so the button can install it.
+	updateState   updateState
+	updateVersion string
+	updateRelease update.Release
+	updateProblem problem
+
+	// version is what this build calls itself, empty in a development build.
+	version string
+
 	codexSound    soundSettings
 	opencodeSound soundSettings
 	soundProblem  problem
@@ -135,6 +145,9 @@ type settings struct {
 	onPreviewGlow   func(events.Source)
 	onPreviewSpeech func(events.Source)
 	onChangeSpeech  func()
+
+	onCheckUpdate   func()
+	onInstallUpdate func()
 }
 
 // text is the panel's words in the current language.
@@ -972,6 +985,28 @@ func (s *settings) aboutPage(c *ui.Context, p palette, t wording) {
 			ui.Box(c).Height(18)
 			ui.Text(c, t.AboutTagline).FontSize(13).TextColor(p.ink).
 				TextAlign(ui.Center)
+			if s.versionKnown() {
+				ui.Box(c).Height(24)
+				ui.Column(c).AlignItems(ui.Center).Children(func() {
+					button := ui.Button(c, s.updateLabel(t)).Height(32).
+						Padding(0, 14)
+					button.Disabled(!s.updateEnabled())
+					if button.Clicked() {
+						if s.updateState == updateAvailable {
+							if s.onInstallUpdate != nil {
+								s.onInstallUpdate()
+							}
+						} else if s.onCheckUpdate != nil {
+							s.onCheckUpdate()
+						}
+					}
+					if hint := s.updateHint(t); hint != "" {
+						ui.Box(c).Height(10)
+						ui.Text(c, hint).FontSize(12).TextColor(p.faint).
+							TextAlign(ui.Center)
+					}
+				})
+			}
 		})
 		ui.Box(c).Height(48)
 	})
@@ -980,11 +1015,10 @@ func (s *settings) aboutPage(c *ui.Context, p palette, t wording) {
 // versionLine is the product version the packaged app carries, or a note for
 // a development build.
 func (s *settings) versionLine(t wording) string {
-	version := mygo.App.Version()
-	if version == "" {
+	if s.version == "" {
 		return t.AboutDev
 	}
-	return fmt.Sprintf(t.AboutVersion, version)
+	return fmt.Sprintf(t.AboutVersion, s.version)
 }
 
 // integrationSection is one group: each producer, what was found, and the

@@ -15,7 +15,7 @@ webview, so the app stays cheap while it sits in the notification area.
 Release binaries support **Windows 11 x64**. Download from
 [GitHub Releases](https://github.com/def-peter/CueDex-win/releases/latest):
 
-- `cuedex-setup-0.2.1-amd64.exe`: NSIS installer.
+- `cuedex-setup-0.3.0-amd64.exe`: NSIS installer.
 - `CueDex.exe`: standalone app; keep it in a permanent location before enabling
   integrations.
 - `SHA256SUMS.txt`: checksums for both downloads.
@@ -28,20 +28,28 @@ Launch CueDex, then enable Codex and/or OpenCode under **Integrations** in its
 settings. Restart OpenCode after enabling its plugin. OpenCode stable versions
 from 2.1.1 up to (but not including) 3.0.0 are supported; 2.2.5 was tested.
 Complete a main-session response to trigger a cue. Closing settings leaves the
-app running in the notification area; use its tray menu to reopen settings or
-quit. Preferences are stored in `%APPDATA%\CueDex\preferences.json`.
+app running in the notification area; a left click on the tray icon reopens it,
+a right click gives the menu. Preferences are stored in
+`%APPDATA%\CueDex\preferences.json`.
+
+**About → Check for Updates** asks GitHub for the newest release once at launch,
+and whenever the button is pressed. When one is found the button downloads the
+release's setup, checks it against the SHA-256 GitHub publishes for that file,
+runs the installer and quits so the files can be replaced.
 
 Integrations store the app's absolute path. Before moving the executable or
 switching from a development copy to the installer, disable the integrations
 and quit the old instance, then launch the new copy and enable them again.
 
-### Known limits in v0.2.1
+### Known limits in v0.3.0
 
 - Codex's Stop hook command was tested with event payloads, but invocation by a
   real Codex CLI on Windows still needs verification.
 - Animation CPU measured 5–7% of one core and RSS grew about 11 MB on the test
   machine, above the original targets of 3% and 10 MB.
-- ARM64 artifacts and automatic updates are not included in this release.
+- Updates are checked against GitHub Releases and installed by downloading the
+  release's setup and running it; there is no silent background update, and
+  ARM64 artifacts are not included.
 
 ## Development
 

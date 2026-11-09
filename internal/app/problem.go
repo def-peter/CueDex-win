@@ -22,6 +22,7 @@ const (
 	openCodeOther
 	autostartProblem
 	busyProblem
+	updateProblemKind
 )
 
 // problem is one failure, or the zero value for none.
@@ -69,6 +70,8 @@ func (p problem) text(t wording) string {
 		return fmt.Sprintf(t.ProblemAutostart, p.detail)
 	case busyProblem:
 		return fmt.Sprintf(t.ProblemBusy, p.detail)
+	case updateProblemKind:
+		return fmt.Sprintf(t.ProblemUpdate, p.detail)
 	}
 	return ""
 }

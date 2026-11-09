@@ -42,6 +42,12 @@ type wording struct {
 	AboutDev     string
 	AboutTagline string
 
+	CheckUpdate       string
+	UpdateInstall     string // fmt: version
+	UpdateChecking    string
+	UpdateDownloading string
+	UpdateUpToDate    string
+
 	Sources              string
 	Glow                 string
 	SoundPane            string
@@ -120,6 +126,7 @@ type wording struct {
 	ProblemOpenOther        string
 	ProblemAutostart        string
 	ProblemBusy             string
+	ProblemUpdate           string // fmt: detail
 }
 
 var chinese = wording{
@@ -153,6 +160,12 @@ var chinese = wording{
 	AboutVersion: "版本 %s",
 	AboutDev:     "开发版",
 	AboutTagline: "Codex 或 OpenCode 完成回复时，用光效、声音或语音提醒你。",
+
+	CheckUpdate:       "检查更新",
+	UpdateInstall:     "下载 %s",
+	UpdateChecking:    "正在检查…",
+	UpdateDownloading: "正在下载…",
+	UpdateUpToDate:    "已是最新",
 
 	Sources:              "提醒来源",
 	Glow:                 "光效",
@@ -227,6 +240,7 @@ var chinese = wording{
 	ProblemOpenOther:        "OpenCode 集成操作失败：%s",
 	ProblemAutostart:        "开机自启设置失败：%s",
 	ProblemBusy:             "%s 正被另一个程序占用，关闭它后重试",
+	ProblemUpdate:           "更新失败：%s",
 }
 
 var english = wording{
@@ -260,6 +274,12 @@ var english = wording{
 	AboutVersion: "Version %s",
 	AboutDev:     "Development build",
 	AboutTagline: "Glow, sound or speech when Codex or OpenCode finishes a reply.",
+
+	CheckUpdate:       "Check for Updates",
+	UpdateInstall:     "Download %s",
+	UpdateChecking:    "Checking…",
+	UpdateDownloading: "Downloading…",
+	UpdateUpToDate:    "You're up to date",
 
 	Sources:              "Attention Source",
 	Glow:                 "Glow",
@@ -334,6 +354,7 @@ var english = wording{
 	ProblemOpenOther:        "OpenCode integration failed: %s",
 	ProblemAutostart:        "Startup entry failed: %s",
 	ProblemBusy:             "%s is open in another program. Close it and try again",
+	ProblemUpdate:           "Update failed: %s",
 }
 
 // copyFor is the table for a resolved language.

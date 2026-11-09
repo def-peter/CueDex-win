@@ -89,6 +89,9 @@ type App struct {
 	previewSerial       uint64
 	speechPreviewTimer  *time.Timer
 	speechPreviewSerial uint64
+	// checking is true while the update check or its download is in flight,
+	// so the button cannot start a second one.
+	checking bool
 }
 
 // New returns an app that keeps its files in dir and installs hooks that run
@@ -162,6 +165,9 @@ func New(dir paths.Dir, exe string) *App {
 	a.state.onChangeQuiet = a.changeGeneral
 	a.state.onToggleOpenAtLogin = a.toggleOpenAtLogin
 	a.state.onChangeDisplay = a.changeDisplay
+	a.state.onCheckUpdate = a.checkForUpdate
+	a.state.onInstallUpdate = a.installUpdate
+	a.state.version = mygo.App.Version()
 	return a
 }
 
@@ -182,6 +188,12 @@ func (a *App) Ready() {
 	// A left click opens the window, the way a background utility behaves on
 	// Windows; the menu stays on the right button.
 	tray.OnClick(a.show)
+
+	// A packaged build asks GitHub once per launch. A development build has no
+	// version to compare, so it stays off the network.
+	if mygo.App.Version() != "" {
+		a.checkForUpdate()
+	}
 
 	// The overlay is four layered windows on the primary display. It costs a
 	// few hundred kilobytes idle, unlike a MyGo window.
