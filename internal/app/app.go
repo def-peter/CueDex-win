@@ -794,16 +794,26 @@ func (a *App) refreshCodex() {
 	if err != nil {
 		a.state.codexProblem = codexProblem(err)
 	}
+	// The desktop app keeps rewriting the notify line as it wraps it in its
+	// own chain, so the slot is restored whenever the integration is on.
+	if installed && err == nil {
+		_ = a.codex.InstallNotify()
+	}
 }
 
 // toggleCodex installs or removes the Stop hook the way the panel's button
-// asks. Both operations rewrite one file and never touch anything else in it.
+// asks. The notify line goes with it: the desktop app runs that one, while a
+// Codex CLI runs the hook.
 func (a *App) toggleCodex() {
 	var err error
 	if a.state.codexInstalled {
-		err = a.codex.Uninstall()
+		if err = a.codex.Uninstall(); err == nil {
+			err = a.codex.UninstallNotify()
+		}
 	} else {
-		err = a.codex.Install()
+		if err = a.codex.Install(); err == nil {
+			err = a.codex.InstallNotify()
+		}
 	}
 	a.refreshCodex()
 	if err != nil {
@@ -819,6 +829,8 @@ func codexProblem(err error) problem {
 	switch {
 	case errors.Is(err, integrations.ErrInvalidHooks):
 		return problem{kind: hooksProblem}
+	case errors.Is(err, integrations.ErrNotifyTaken):
+		return problem{kind: notifyTakenProblem}
 	case integrations.Busy(err):
 		return newProblem(busyProblem, "hooks.json")
 	}

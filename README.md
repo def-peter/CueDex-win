@@ -15,7 +15,7 @@ webview, so the app stays cheap while it sits in the notification area.
 Release binaries support **Windows 11 x64**. Download from
 [GitHub Releases](https://github.com/def-peter/CueDex-win/releases/latest):
 
-- `cuedex-setup-0.3.0-amd64.exe`: NSIS installer.
+- `cuedex-setup-0.4.0-amd64.exe`: NSIS installer.
 - `CueDex.exe`: standalone app; keep it in a permanent location before enabling
   integrations.
 - `SHA256SUMS.txt`: checksums for both downloads.
@@ -27,6 +27,13 @@ do not disable Windows security protections.
 Launch CueDex, then enable Codex and/or OpenCode under **Integrations** in its
 settings. Restart OpenCode after enabling its plugin. OpenCode stable versions
 from 2.1.1 up to (but not including) 3.0.0 are supported; 2.2.5 was tested.
+
+Enabling the Codex integration writes two things: a `Stop` hook in
+`~/.codex/hooks.json`, which a Codex CLI runs, and CueDex's own slot in the
+`notify` chain of `~/.codex/config.toml`, which the ChatGPT desktop app runs.
+The desktop app does not execute user `hooks.json` entries, so the notify line
+is what makes it cue; the app wraps the previous command in its own chain, and
+CueDex restores its slot at every start.
 Complete a main-session response to trigger a cue. Closing settings leaves the
 app running in the notification area; a left click on the tray icon reopens it,
 a right click gives the menu. Preferences are stored in
@@ -41,7 +48,7 @@ Integrations store the app's absolute path. Before moving the executable or
 switching from a development copy to the installer, disable the integrations
 and quit the old instance, then launch the new copy and enable them again.
 
-### Known limits in v0.3.0
+### Known limits in v0.4.0
 
 - Codex's Stop hook command was tested with event payloads, but invocation by a
   real Codex CLI on Windows still needs verification.

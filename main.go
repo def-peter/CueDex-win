@@ -21,6 +21,13 @@ func main() {
 		return
 	}
 
+	// The desktop app's notify line runs this: the payload is the argument,
+	// not stdin, and no tray or window may appear.
+	if opts.notify != "" {
+		runNotify(opts.notify)
+		return
+	}
+
 	mygo.App.SetName("CueDex")
 	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
 
@@ -92,6 +99,22 @@ func runHook(producer string) {
 	}
 }
 
+// runNotify runs the entry Codex's legacy notify line calls: the payload is the
+// argument, and the same silence applies.
+func runNotify(payload string) {
+	dir, err := paths.UserData()
+	if err != nil {
+		return
+	}
+	if err := dir.Prepare(); err != nil {
+		return
+	}
+	wrote, err := hook.Notify([]byte(payload), dir.Events())
+	if err == nil && wrote {
+		_ = hook.Wake(executable())
+	}
+}
+
 // options are the launch arguments the app understands.
 type options struct {
 	// cue asks the running app to show a cue now (PROTOCOL.md).
@@ -102,6 +125,9 @@ type options struct {
 	// hook names the producer whose hook this process is. Empty means this is
 	// the app itself.
 	hook string
+	// notify carries Codex's legacy notify payload, which arrives as an
+	// argument rather than on stdin.
+	notify string
 }
 
 func parseArgs(args []string) options {
@@ -115,6 +141,11 @@ func parseArgs(args []string) options {
 		case "--hook":
 			if i+1 < len(args) {
 				o.hook = args[i+1]
+				i++
+			}
+		case "--notify":
+			if i+1 < len(args) {
+				o.notify = args[i+1]
 				i++
 			}
 		}

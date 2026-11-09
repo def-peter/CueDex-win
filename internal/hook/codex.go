@@ -4,9 +4,6 @@
 package hook
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"io"
 	"os"
@@ -52,16 +49,9 @@ func CodexEvent(data []byte, now time.Time) (events.Event, bool) {
 		return events.Event{}, false
 	}
 	session := clamp(payload.Session, "legacy")
-	id := ""
-	if turn := clamp(payload.Turn, ""); turn != "" {
-		sum := sha256.Sum256([]byte(session + "\n" + turn))
-		id = hex.EncodeToString(sum[:])
-	} else {
-		var random [16]byte
-		if _, err := rand.Read(random[:]); err != nil {
-			return events.Event{}, false
-		}
-		id = hex.EncodeToString(random[:])
+	id, ok := identity(session, clamp(payload.Turn, ""))
+	if !ok {
+		return events.Event{}, false
 	}
 	return events.Event{
 		Source:      events.Codex,

@@ -15,6 +15,7 @@ const (
 	speechProblem
 	saveProblem
 	hooksProblem
+	notifyTakenProblem
 	codexProblemKind
 	openCodeMissing
 	openCodeUnsupported
@@ -53,6 +54,8 @@ func (p problem) text(t wording) string {
 		return fmt.Sprintf(t.ProblemSave, p.detail)
 	case hooksProblem:
 		return t.ProblemHooks
+	case notifyTakenProblem:
+		return t.ProblemNotifyTaken
 	case codexProblemKind:
 		return fmt.Sprintf(t.ProblemCodex, p.detail)
 	case openCodeMissing:

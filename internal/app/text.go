@@ -118,6 +118,7 @@ type wording struct {
 	ProblemSpeech           string
 	ProblemSave             string
 	ProblemHooks            string
+	ProblemNotifyTaken      string
 	ProblemCodex            string
 	ProblemOpenNo           string
 	ProblemOpenOld          string // fmt: version
@@ -232,6 +233,7 @@ var chinese = wording{
 	ProblemSpeech:           "语音播报失败：%s",
 	ProblemSave:             "偏好保存失败：%s",
 	ProblemHooks:            "hooks.json 结构异常，已停止写入，你的配置没有被改动",
+	ProblemNotifyTaken:      "config.toml 的 notify 已被其它程序占用，桌面版的提醒无法开启",
 	ProblemCodex:            "Codex 集成操作失败：%s",
 	ProblemOpenNo:           "没有检测到 OpenCode，未安装插件",
 	ProblemOpenOld:          "OpenCode %s 不在支持范围（需要 2.1.1 及以上、3.0.0 以下），未安装插件",
@@ -346,6 +348,7 @@ var english = wording{
 	ProblemSpeech:           "Speech failed: %s",
 	ProblemSave:             "Saving preferences failed: %s",
 	ProblemHooks:            "hooks.json is malformed; nothing was written and your configuration is untouched",
+	ProblemNotifyTaken:      "Another program owns config.toml's notify line, so the desktop app cannot cue",
 	ProblemCodex:            "Codex integration failed: %s",
 	ProblemOpenNo:           "OpenCode was not detected; the plugin was not installed",
 	ProblemOpenOld:          "OpenCode %s is outside the supported range (2.1.1 or newer, below 3.0.0); the plugin was not installed",
