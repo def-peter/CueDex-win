@@ -591,7 +591,7 @@ func TestSpeechSectionOffersRecordingsWithoutVoices(t *testing.T) {
 	if tt.HasText("通知文字") {
 		t.Fatalf("the phrase field stayed in recording mode: %q", tt.Texts())
 	}
-	if !tt.HasText("消息提醒（男声）") {
+	if !tt.HasText("快看我消息（男）") {
 		t.Fatalf("the clip picker is missing: %q", tt.Texts())
 	}
 }

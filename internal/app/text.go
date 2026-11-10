@@ -204,7 +204,7 @@ var chinese = wording{
 	SpeechNoVoice:       "没有可用的系统语音；可以改用预录语音。",
 	SpeechVoice:         "说话人",
 	VoiceDefault:        "系统默认",
-	Recordings:          []string{"消息提醒（男声）", "消息提醒（女声）", "查看消息（男声）", "查看消息（女声）"},
+	Recordings:          []string{"快看我消息（男）", "快看我消息（女）", "Check Your Messages (Male)", "Check Your Messages (Female)"},
 
 	Integrations:  "集成",
 	CodexTitle:    "Codex 集成",
