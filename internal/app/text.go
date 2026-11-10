@@ -90,6 +90,8 @@ type wording struct {
 	SpeechVoice         string
 	VoiceDefault        string
 	Recordings          []string
+	ClipChinese         string
+	ClipEnglish         string
 
 	Integrations  string
 	CodexTitle    string
@@ -205,6 +207,8 @@ var chinese = wording{
 	SpeechVoice:         "说话人",
 	VoiceDefault:        "系统默认",
 	Recordings:          []string{"快看我消息（男）", "快看我消息（女）", "Check Your Messages (Male)", "Check Your Messages (Female)"},
+	ClipChinese:         "中文",
+	ClipEnglish:         "英文",
 
 	Integrations:  "集成",
 	CodexTitle:    "Codex 集成",
@@ -320,6 +324,8 @@ var english = wording{
 	SpeechVoice:         "Voice",
 	VoiceDefault:        "System default",
 	Recordings:          []string{"Message Reminder (Male)", "Message Reminder (Female)", "Check Your Messages (Male)", "Check Your Messages (Female)"},
+	ClipChinese:         "Chinese",
+	ClipEnglish:         "English",
 
 	Integrations:  "Integrations",
 	CodexTitle:    "Codex integration",
@@ -374,6 +380,15 @@ func (t wording) phrase(source events.Source) string {
 		return t.PhraseOpenCode
 	}
 	return t.PhraseCodex
+}
+
+// clipLanguage names the language a bundled clip speaks, which the picker uses
+// as its group heading.
+func (t wording) clipLanguage(language string) string {
+	if language == "en" {
+		return t.ClipEnglish
+	}
+	return t.ClipChinese
 }
 
 // soundLabels names the bundled sounds in the order sound.All returns them.

@@ -7,6 +7,8 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"github.com/def-peter/cuedex-win/internal/recordings"
+
 	_ "embed"
 )
 
@@ -186,6 +188,33 @@ func (p palette) segmented(c *ui.Context, selected *int, label string, width flo
 		}
 	})
 	return trackEl
+}
+
+// recordingPicker chooses one of the bundled clips. Its menu groups the clips
+// by the language they speak, as the mac app's sections do, and marks the clip
+// in use; each heading is a disabled item, so it cannot be chosen.
+func (p palette) recordingPicker(c *ui.Context, t wording, value *string, enabled bool, change func()) {
+	ui.PopoverMenuButton(c, recordingLabel(*value, t), func(m *ui.Menu) {
+		labels := t.recordingLabels()
+		last := ""
+		for i, clip := range recordings.All() {
+			if clip.Language != last {
+				if last != "" {
+					m.Separator()
+				}
+				m.Item(t.clipLanguage(clip.Language)).Disabled(true)
+				last = clip.Language
+			}
+			label := clip.ID
+			if i < len(labels) {
+				label = labels[i]
+			}
+			if m.Item(label).Checked(clip.ID == *value).Chosen() {
+				*value = clip.ID
+				change()
+			}
+		}
+	}).Width(240).Height(32).Disabled(!enabled).Label(t.SpeechRecording)
 }
 
 //go:embed icon_128x128.png

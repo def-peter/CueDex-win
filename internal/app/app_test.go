@@ -560,6 +560,36 @@ func TestSpeechSectionAppearsWithVoices(t *testing.T) {
 	}
 }
 
+// The mac app's Recording picker is a menu with one section per language. The
+// panel cannot draw sections in a select, so the picker is a menu whose
+// headings are disabled items and whose clips carry a check mark.
+func TestTheRecordingPickerGroupsTheClipsByLanguage(t *testing.T) {
+	s := settings{tab: tabCues, pane: paneSound, source: string(events.Codex)}
+	s.setVoices(nil)
+	s.applySpeech(prefs.Default().SetSpeech(prefs.SpeechPreferences{
+		Codex: true, CodexMode: prefs.SpeechRecording,
+	}))
+	tt := ui.NewTester(s.view, 820, 700)
+
+	if err := tt.Click("快看我消息（男）"); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"中文", "英文", "Check Your Messages (Male)", "Check Your Messages (Female)"} {
+		if !tt.HasText(want) {
+			t.Fatalf("%q missing from %q", want, tt.Texts())
+		}
+	}
+	if err := tt.Click("Check Your Messages (Female)"); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.speech().Recording(events.Codex); got != "check-your-messages-female" {
+		t.Fatalf("chose %q", got)
+	}
+	if !tt.HasText("Check Your Messages (Female)") {
+		t.Fatalf("the trigger does not show the choice: %q", tt.Texts())
+	}
+}
+
 func TestSpeechSectionOffersRecordingsWithoutVoices(t *testing.T) {
 	s := settings{tab: tabCues, pane: paneSound, source: string(events.Codex)}
 	s.setVoices(nil)

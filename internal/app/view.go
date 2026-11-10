@@ -373,8 +373,8 @@ func (s *soundSettings) choice() prefs.SoundChoice {
 // stored phrase, or a bundled clip plays. The clip is a label because a Select
 // binds to a string.
 type speechSettings struct {
-	mode      int // speechSystem or speechRecording
-	recording string
+	mode      int    // speechSystem or speechRecording
+	recording string // the clip's id
 }
 
 func (s *speechSettings) apply(p prefs.SpeechPreferences, source events.Source, t wording) {
@@ -382,7 +382,7 @@ func (s *speechSettings) apply(p prefs.SpeechPreferences, source events.Source, 
 	if p.Mode(source) == prefs.SpeechRecording {
 		s.mode = speechRecording
 	}
-	s.recording = recordingLabel(p.Recording(source), t)
+	s.recording = p.Recording(source)
 }
 
 func (s *speechSettings) modeValue() prefs.SpeechMode {
@@ -392,9 +392,7 @@ func (s *speechSettings) modeValue() prefs.SpeechMode {
 	return prefs.SpeechSystem
 }
 
-func (s *speechSettings) recordingValue(t wording) string {
-	return recordingValue(s.recording, t)
-}
+func (s *speechSettings) recordingValue() string { return s.recording }
 
 // recordingLabel names a clip in the panel's language. An unknown name shows
 // the default clip rather than an empty row.
@@ -409,16 +407,6 @@ func recordingLabel(id string, t wording) string {
 		return labels[0]
 	}
 	return id
-}
-
-func recordingValue(label string, t wording) string {
-	all := recordings.All()
-	for i, known := range t.recordingLabels() {
-		if known == label && i < len(all) {
-			return all[i].ID
-		}
-	}
-	return recordings.DefaultID
 }
 
 // setEnabled keeps the switch and the stored level coherent: off writes zero
@@ -542,8 +530,8 @@ func (s *settings) speech() prefs.SpeechPreferences {
 		OpenCodeText:      s.speechTextOpenCode,
 		CodexMode:         s.codexSpeech.modeValue(),
 		OpenCodeMode:      s.opencodeSpeech.modeValue(),
-		CodexRecording:    s.codexSpeech.recordingValue(s.text()),
-		OpenCodeRecording: s.opencodeSpeech.recordingValue(s.text()),
+		CodexRecording:    s.codexSpeech.recordingValue(),
+		OpenCodeRecording: s.opencodeSpeech.recordingValue(),
 	}
 }
 
@@ -932,9 +920,7 @@ func (s *settings) speechPane(c *ui.Context, p palette, t wording, source events
 		p.rule(c)
 		if speech.mode == speechRecording {
 			p.row(c, t.SpeechRecording, "", func() {
-				ui.Select(c, &speech.recording, t.recordingLabels()).
-					Label(t.SpeechRecording).Width(200).Disabled(!on).
-					OnChange(changed)
+				p.recordingPicker(c, t, &speech.recording, on, changed)
 				if ui.Button(c, t.TestSpeech).Disabled(!on).Clicked() {
 					speak()
 				}
