@@ -1,6 +1,7 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -113,7 +115,7 @@ func TestDownloadChecksTheDigestAndWritesTheFile(t *testing.T) {
 		URL:    server.URL + "/setup.exe",
 		Digest: "sha256:" + hex.EncodeToString(sum[:]),
 	}
-	path, err := Download(context.Background(), server.Client(), asset, dir)
+	path, err := Download(context.Background(), server.Client(), asset, dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +142,7 @@ func TestDownloadRefusesAMismatch(t *testing.T) {
 		URL:    server.URL + "/setup.exe",
 		Digest: "sha256:" + strings.Repeat("0", 64),
 	}
-	if _, err := Download(context.Background(), server.Client(), asset, dir); err == nil {
+	if _, err := Download(context.Background(), server.Client(), asset, dir, nil); err == nil {
 		t.Fatal("a mismatched download was accepted")
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
@@ -149,7 +151,44 @@ func TestDownloadRefusesAMismatch(t *testing.T) {
 }
 
 func TestDownloadNeedsAChecksum(t *testing.T) {
-	if _, err := Download(context.Background(), nil, Asset{Name: "x.exe"}, t.TempDir()); err != ErrNoChecksum {
+	if _, err := Download(context.Background(), nil, Asset{Name: "x.exe"}, t.TempDir(), nil); err != ErrNoChecksum {
 		t.Fatalf("err %v", err)
+	}
+}
+
+// The panel draws a bar from these reports, so they have to arrive more than
+// once and end at the file's size.
+func TestDownloadReportsProgress(t *testing.T) {
+	body := bytes.Repeat([]byte("cuedex"), 64<<10) // 384 KiB
+	sum := sha256.Sum256(body)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.Write(body)
+	}))
+	defer server.Close()
+
+	var done, totals []int64
+	asset := Asset{
+		Name:   "cuedex-setup-0.4.3-amd64.exe",
+		URL:    server.URL + "/setup.exe",
+		Digest: "sha256:" + hex.EncodeToString(sum[:]),
+	}
+	if _, err := Download(context.Background(), server.Client(), asset, t.TempDir(),
+		func(d, total int64) { done = append(done, d); totals = append(totals, total) }); err != nil {
+		t.Fatal(err)
+	}
+	if len(done) < 2 {
+		t.Fatalf("%d reports, want several", len(done))
+	}
+	for i := 1; i < len(done); i++ {
+		if done[i] < done[i-1] {
+			t.Fatalf("progress went backwards: %v", done)
+		}
+	}
+	if last := done[len(done)-1]; last != int64(len(body)) {
+		t.Fatalf("last report %d, want %d", last, len(body))
+	}
+	if got := totals[len(totals)-1]; got != int64(len(body)) {
+		t.Fatalf("total %d, want %d", got, len(body))
 	}
 }

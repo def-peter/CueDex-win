@@ -104,6 +104,8 @@ type settings struct {
 	updateVersion string
 	updateRelease update.Release
 	updateProblem problem
+	// updateProgress is how much of the installer has arrived, 0 to 1.
+	updateProgress float64
 
 	// version is what this build calls itself, empty in a development build.
 	version string
@@ -986,7 +988,13 @@ func (s *settings) aboutPage(c *ui.Context, p palette, t wording) {
 							s.onCheckUpdate()
 						}
 					}
-					if hint := s.updateHint(t); hint != "" {
+					if s.updateState == updateDownloading {
+						ui.Box(c).Height(12)
+						ui.Progress(c, s.updateProgress).Width(240)
+						ui.Box(c).Height(6)
+						ui.Text(c, fmt.Sprintf("%d%%", int(s.updateProgress*100+0.5))).
+							FontSize(12).TextColor(p.faint).TextAlign(ui.Center)
+					} else if hint := s.updateHint(t); hint != "" {
 						ui.Box(c).Height(10)
 						ui.Text(c, hint).FontSize(12).TextColor(p.faint).
 							TextAlign(ui.Center)

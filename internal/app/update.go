@@ -28,8 +28,8 @@ var (
 	updateFetch = func(ctx context.Context) (update.Release, error) {
 		return update.Fetch(ctx, nil, update.LatestURL)
 	}
-	updateDownload = func(ctx context.Context, release update.Release, dir string) (string, error) {
-		return update.Download(ctx, nil, release.Installer, dir)
+	updateDownload = func(ctx context.Context, release update.Release, dir string, progress func(done, total int64)) (string, error) {
+		return update.Download(ctx, nil, release.Installer, dir, progress)
 	}
 	updateRun  = func(path string) error { return exec.Command(path).Start() }
 	updateQuit = func() { mygo.App.Quit() }
@@ -89,12 +89,28 @@ func (a *App) installUpdate() {
 	a.checking = true
 	a.state.updateState = updateDownloading
 	a.state.updateProblem = problem{}
+	a.state.updateProgress = 0
 	a.invalidate()
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		path, err := updateDownload(ctx, release, a.dir.Updates())
+		var last time.Time
+		progress := func(done, total int64) {
+			if total <= 0 {
+				return
+			}
+			if !last.IsZero() && time.Since(last) < 100*time.Millisecond && done < total {
+				return
+			}
+			last = time.Now()
+			fraction := float64(done) / float64(total)
+			mygo.RunOnMain(func() {
+				a.state.updateProgress = fraction
+				a.invalidate()
+			})
+		}
+		path, err := updateDownload(ctx, release, a.dir.Updates(), progress)
 		mygo.RunOnMain(func() {
 			a.checking = false
 			if err == nil {

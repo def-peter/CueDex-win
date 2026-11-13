@@ -160,8 +160,9 @@ func IsNewer(candidate, current string) bool {
 }
 
 // Download fetches the installer into dir and checks it against the digest the
-// release published. It returns the file's path, ready to run.
-func Download(ctx context.Context, client *http.Client, asset Asset, dir string) (string, error) {
+// release published. It returns the file's path, ready to run. progress, when
+// set, is told how much has arrived; total is -1 when the size is unknown.
+func Download(ctx context.Context, client *http.Client, asset Asset, dir string, progress func(done, total int64)) (string, error) {
 	if asset.Digest == "" {
 		return "", ErrNoChecksum
 	}
@@ -189,6 +190,14 @@ func Download(ctx context.Context, client *http.Client, asset Asset, dir string)
 		return "", fmt.Errorf("update: download answered %s", response.Status)
 	}
 
+	total := response.ContentLength
+	if total <= 0 {
+		total = asset.Size
+	}
+	if total <= 0 {
+		total = -1
+	}
+
 	path := filepath.Join(dir, asset.Name)
 	temp := path + ".part"
 	file, err := os.Create(temp)
@@ -196,10 +205,15 @@ func Download(ctx context.Context, client *http.Client, asset Asset, dir string)
 		return "", err
 	}
 	hash := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(file, hash), response.Body); err != nil {
+	body := &countingReader{body: response.Body, total: total, progress: progress}
+	written, err := io.Copy(io.MultiWriter(file, hash), body)
+	if err != nil {
 		file.Close()
 		os.Remove(temp)
 		return "", err
+	}
+	if progress != nil {
+		progress(written, total)
 	}
 	if err := file.Close(); err != nil {
 		os.Remove(temp)
@@ -214,4 +228,24 @@ func Download(ctx context.Context, client *http.Client, asset Asset, dir string)
 		return "", err
 	}
 	return path, nil
+}
+
+// countingReader reports the download's progress as it reads, at most every
+// 32 KiB so a fast file does not flood the caller.
+type countingReader struct {
+	body     io.Reader
+	done     int64
+	reported int64
+	total    int64
+	progress func(done, total int64)
+}
+
+func (r *countingReader) Read(p []byte) (int, error) {
+	n, err := r.body.Read(p)
+	r.done += int64(n)
+	if r.progress != nil && (r.done-r.reported >= 32<<10) {
+		r.reported = r.done
+		r.progress(r.done, r.total)
+	}
+	return n, err
 }
