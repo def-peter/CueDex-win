@@ -846,6 +846,12 @@ func (a *App) refreshOpenCode() {
 	if err != nil {
 		a.state.opencodeProblem = openCodeProblem(err)
 	}
+	// The plugin carries this app's path, so an install or a move would leave
+	// it waking a copy that is no longer there. Install rewrites only when the
+	// rendered file differs, so an unchanged one is left alone.
+	if installed && err == nil {
+		_ = a.opencode.Install()
+	}
 }
 
 // toggleOpenCode installs or removes the local plugin the way the panel's

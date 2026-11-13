@@ -8,6 +8,7 @@ import (
 
 	"github.com/def-peter/cuedex-win/internal/app"
 	"github.com/def-peter/cuedex-win/internal/hook"
+	"github.com/def-peter/cuedex-win/internal/instance"
 	"github.com/def-peter/cuedex-win/internal/paths"
 )
 
@@ -30,6 +31,19 @@ func main() {
 
 	mygo.App.SetName("CueDex")
 	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
+
+	// One process on this machine, whichever copy was started. MyGo's own lock
+	// hands arguments over through a socket in %TEMP%, and a cleanup that
+	// deletes that file lets the next launch become a second app; this mutex
+	// lives in the kernel and cannot be deleted while the first one runs.
+	release, first := instance.Acquire(`Local\CueDex-single-instance`)
+	if !first {
+		// Best effort: hand --cue to the running copy through MyGo's socket.
+		// The event file is already on disk, so a missed nudge costs nothing.
+		mygo.App.RequestSingleInstanceLock()
+		return
+	}
+	defer release()
 
 	// A second launch hands its arguments to the running instance and ends
 	// there, so only one tray icon and one event consumer ever exist.

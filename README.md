@@ -15,7 +15,7 @@ webview, so the app stays cheap while it sits in the notification area.
 Release binaries support **Windows 11 x64**. Download from
 [GitHub Releases](https://github.com/def-peter/CueDex-win/releases/latest):
 
-- `cuedex-setup-0.4.1-amd64.exe`: NSIS installer.
+- `cuedex-setup-0.4.2-amd64.exe`: NSIS installer.
 - `CueDex.exe`: standalone app; keep it in a permanent location before enabling
   integrations.
 - `SHA256SUMS.txt`: checksums for both downloads.
@@ -48,7 +48,7 @@ Integrations store the app's absolute path. Before moving the executable or
 switching from a development copy to the installer, disable the integrations
 and quit the old instance, then launch the new copy and enable them again.
 
-### Known limits in v0.4.1
+### Known limits in v0.4.2
 
 - Codex's Stop hook command was tested with event payloads, but invocation by a
   real Codex CLI on Windows still needs verification.
